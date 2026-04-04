@@ -353,7 +353,9 @@ function openInNewInstance(streamUrl, title) {
 
 function sanitizePlaylistTitle(title) {
   return (
-    String(title || 'Unknown Title').replace(/[\r\n]+/g, ' ').trim() || 'Unknown Title'
+    String(title || 'Unknown Title')
+      .replace(/[\r\n]+/g, ' ')
+      .trim() || 'Unknown Title'
   );
 }
 
@@ -389,20 +391,32 @@ function loadQueueInCurrentWindow(queueItems, title) {
   const tempPlaylistPath = utils.resolvePath(
     `@tmp/jellyfin_queue_${Date.now()}_${Math.floor(Math.random() * 100000)}.m3u8`
   );
+  const shouldBootstrapWindow = Boolean(core?.status?.idle);
 
   try {
     fs.writeFileSync(tempPlaylistPath, buildM3uPlaylist(queueItems), 'utf8');
-    mpv.command('loadlist', [tempPlaylistPath, 'replace']);
+    if (shouldBootstrapWindow) {
+      debugLog(`Player is idle, opening queue playlist via core.open: ${tempPlaylistPath}`);
+      core.open(tempPlaylistPath);
+    } else {
+      mpv.command('loadlist', [tempPlaylistPath, 'replace']);
+    }
   } catch (error) {
     debugLog(`Failed to load titled playlist file: ${error.message}`);
     queueItems.forEach((item, index) => {
+      const useCoreOpenForFirstItem = shouldBootstrapWindow && index === 0;
       const action = index === 0 ? 'replace' : 'append';
       const itemTitle = item.title || (index === 0 ? title : null);
-      const args = [item.streamUrl, action];
-      if (itemTitle) {
-        args.push('-1', `force-media-title=${itemTitle}`);
+      if (useCoreOpenForFirstItem) {
+        debugLog(`Falling back to core.open for first queue item: ${item.streamUrl}`);
+        core.open(item.streamUrl);
+      } else {
+        const args = [item.streamUrl, action];
+        if (itemTitle) {
+          args.push('-1', `force-media-title=${itemTitle}`);
+        }
+        mpv.command('loadfile', args);
       }
-      mpv.command('loadfile', args);
     });
   }
 }
