@@ -349,6 +349,35 @@ function openInNewInstance(streamUrl, title) {
   }
 }
 
+function loadQueueInCurrentWindow(queueItems, title) {
+  if (!queueItems || queueItems.length === 0) {
+    throw new Error('Queue is empty');
+  }
+
+  if (getCurrentPlaybackSession()) {
+    isReplacingPlayback = true;
+  }
+
+  try {
+    if (playlist && typeof playlist.clear === 'function') {
+      playlist.clear();
+    }
+    clearQueuedFlag();
+  } catch (clearError) {
+    debugLog(`Could not clear playlist before opening queue: ${clearError.message}`);
+  }
+
+  queueItems.forEach((item, index) => {
+    const action = index === 0 ? 'replace' : 'append-play';
+    const itemTitle = item.title || (index === 0 ? title : null);
+    const args = [item.streamUrl, action];
+    if (itemTitle) {
+      args.push('-1', `force-media-title=${itemTitle}`);
+    }
+    mpv.command('loadfile', args);
+  });
+}
+
 /**
  * Handle media playback requests from sidebar
  */
@@ -357,51 +386,63 @@ function handlePlayMedia(message) {
   debugLog('handlePlayMedia called with message', {
     title: message?.title,
     streamUrl: message?.streamUrl,
+    queueLength: message?.queueItems?.length,
   });
-  const { streamUrl, title } = message;
+  const { streamUrl, title, queueItems } = message;
   debugLog(`Opening media: ${title} - ${streamUrl}`);
 
   try {
     const openInNewWindow = preferences.get('open_in_new_window');
     debugLog('open_in_new_window preference: ' + openInNewWindow);
+    const normalizedQueue =
+      Array.isArray(queueItems) && queueItems.length > 0
+        ? queueItems.filter((item) => item && item.streamUrl)
+        : null;
 
-    if (openInNewWindow) {
+    if (openInNewWindow && normalizedQueue && normalizedQueue.length > 1) {
+      debugLog('Playlist queue requested with open_in_new_window enabled, using current window');
+      core.osd(`Opening playlist in current window: ${title}`);
+      loadQueueInCurrentWindow(normalizedQueue, title);
+    } else if (openInNewWindow) {
       debugLog('Opening media in new instance: ' + streamUrl);
       core.osd(`Opening in new window: ${title}`);
       openInNewInstance(streamUrl, title);
     } else {
       debugLog('Opening media in current window: ' + streamUrl);
       core.osd(`Opening: ${title}`);
-
-      // Set replacement guard so end-file handler doesn't send spurious stop
-      if (getCurrentPlaybackSession()) {
-        isReplacingPlayback = true;
-      }
-
-      // Clear any previous playlist entries to prevent stale titles
-      try {
-        if (playlist && typeof playlist.clear === 'function') {
-          playlist.clear();
+      if (normalizedQueue && normalizedQueue.length > 1) {
+        loadQueueInCurrentWindow(normalizedQueue, title);
+      } else {
+        // Set replacement guard so end-file handler doesn't send spurious stop
+        if (getCurrentPlaybackSession()) {
+          isReplacingPlayback = true;
         }
-        // Reset autoplay state when starting new playback
-        clearQueuedFlag();
-      } catch (clearError) {
-        debugLog(`Could not clear playlist before opening: ${clearError.message}`);
-      }
 
-      // Use mpv loadfile with force-media-title to set the title atomically
-      // This prevents the stale title bug where the old title persists until
-      // the async setVideoTitleFromMetadata call completes
-      if (title) {
+        // Clear any previous playlist entries to prevent stale titles
         try {
-          mpv.command('loadfile', [streamUrl, 'replace', '-1', `force-media-title=${title}`]);
-        } catch (error) {
-          debugLog(`mpv loadfile with title failed: ${error.message}, falling back to core.open`);
-          isReplacingPlayback = false;
+          if (playlist && typeof playlist.clear === 'function') {
+            playlist.clear();
+          }
+          // Reset autoplay state when starting new playback
+          clearQueuedFlag();
+        } catch (clearError) {
+          debugLog(`Could not clear playlist before opening: ${clearError.message}`);
+        }
+
+        // Use mpv loadfile with force-media-title to set the title atomically
+        // This prevents the stale title bug where the old title persists until
+        // the async setVideoTitleFromMetadata call completes
+        if (title) {
+          try {
+            mpv.command('loadfile', [streamUrl, 'replace', '-1', `force-media-title=${title}`]);
+          } catch (error) {
+            debugLog(`mpv loadfile with title failed: ${error.message}, falling back to core.open`);
+            isReplacingPlayback = false;
+            core.open(streamUrl);
+          }
+        } else {
           core.open(streamUrl);
         }
-      } else {
-        core.open(streamUrl);
       }
     }
 

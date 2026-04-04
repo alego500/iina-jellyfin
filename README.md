@@ -22,6 +22,9 @@ An comprehensive IINA plugin that provides Jellyfin media server integration, in
 - **Recent items browser**: Browse recently added movies and TV shows
 - **Music library browser**: Browse your music library by albums, artists, or songs with album artwork
 - **Album track listing**: View and play individual tracks from any album
+- **Playlist browser**: Browse Jellyfin playlists in a dedicated sidebar tab
+- **Playlist item listing**: Open playlists to inspect contained movies, episodes, and audio tracks
+- **Playlist queue playback**: Use "Play All" to load playlist items into IINA's playlist queue
 - **Search functionality**: Search your Jellyfin library for specific content
 - **Advanced filtering & sorting**: Sort by name, date added, release date, or rating; filter by watch status, favorites, and genre
 - **Series episode selection**: Browse seasons and episodes for TV shows
@@ -104,7 +107,7 @@ Once you have servers saved:
 
 #### Browsing and Playback
 
-1. Browse media in the tabs: Home (Continue Watching, Up Next, Recently Added), Movies, TV Series, Music, or Search
+1. Browse media in the tabs: Home (Continue Watching, Up Next, Recently Added), Movies, TV Series, Music, Playlists, or Search
 2. Click any media item to play it in IINA
 3. Use the player controls or keyboard shortcuts to control playback
 4. Your progress will automatically sync back to Jellyfin
@@ -122,6 +125,17 @@ The Music tab provides three views for browsing your music collection:
 Click an album to view its track listing. From there you can play individual tracks or use "Play All" to start the album. Use the Filter/Sort button to sort by name, date, or rating, and filter by genre.
 
 Search also supports music content — use the "Albums" and "Songs" filter chips to find music across your library.
+
+##### Playlists
+
+The Playlists tab lists Jellyfin playlists returned by the server for the current user.
+
+- Open a playlist to browse its items
+- Click an individual playlist item to play it immediately
+- Use **Play All** to load the playlist into IINA's playlist queue
+- Use **Open in Jellyfin** to jump to the playlist details page in the Jellyfin web UI
+
+Search also supports playlists via the "Playlists" filter chip.
 
 ##### Advanced Filtering & Sorting
 
@@ -180,6 +194,7 @@ Access plugin settings through IINA → Preferences → Plugins → Jellyfin:
 - **Download all available subtitles**: Download all subtitle tracks, ignoring language preferences
 - **Set video title from Jellyfin metadata**: Replace filenames with proper movie/show titles
 - **Open media in new IINA window**: Play media from browser in separate windows
+- **Playlist queue behavior**: Multi-item album and playlist playback is loaded into the current IINA window so the queue is preserved
 - **Enable autoplay**: Automatically queue the next episode when the current episode finishes, supporting cross-season playback
 
 ### Menu Options
@@ -194,11 +209,11 @@ The plugin adds these menu items to IINA:
 
 ### Development Scripts
 
-- `pnpm run check`: Run ESLint and Prettier checks
-- `pnpm run lint`: Run ESLint
-- `pnpm run lint:fix`: Auto-fix ESLint issues
-- `pnpm run format`: Check Prettier formatting
-- `pnpm run format:fix`: Auto-fix Prettier formatting
+- `npm run check`: Run ESLint and Prettier checks
+- `npm run lint`: Run ESLint
+- `npm run lint:fix`: Auto-fix ESLint issues
+- `npm run format`: Check Prettier formatting
+- `npm run format:fix`: Auto-fix Prettier formatting
 - `/Applications/IINA.app/Contents/MacOS/iina-plugin link .`: Link plugin to IINA for testing
 - `/Applications/IINA.app/Contents/MacOS/iina-plugin unlink .`: Unlink plugin from IINA
 

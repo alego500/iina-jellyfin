@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### 🚀 Features
+
+* **sidebar:** add Jellyfin playlist browsing and playlist item views
+* **playback:** queue album and playlist "Play All" actions in IINA
+
+### 📚 Documentation
+
+* document playlist browsing and queue playback in README
+
 ## [0.6.0](https://github.com/mhajder/iina-jellyfin/compare/v0.5.0...v0.6.0) (2026-02-27)
 
 

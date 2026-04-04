@@ -48,6 +48,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       document.getElementById('mainContent').style.display = 'none';
       this.hideEpisodeSelection();
       this.hideAlbumTracks();
+      this.hidePlaylistItems();
     },
 
     /**
@@ -63,6 +64,8 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       this.selectedAlbum = null;
       this.selectedTrack = null;
       this.albumTracks = [];
+      this.selectedPlaylist = null;
+      this.playlistItems = [];
 
       // Clear media list containers
       const listIds = [
@@ -72,6 +75,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         'moviesList',
         'seriesList',
         'musicList',
+        'playlistsList',
         'searchResults',
       ];
       for (const id of listIds) {
@@ -486,6 +490,8 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         subtitle = 'TV Series';
       } else if (item.Type === 'Movie') {
         subtitle = 'Movie';
+      } else if (item.Type === 'Playlist') {
+        subtitle = item.ChildCount ? `${item.ChildCount} items` : 'Playlist';
       } else if (item.Type === 'MusicAlbum') {
         subtitle = item.AlbumArtist || 'Album';
       } else if (item.Type === 'Audio') {
@@ -509,7 +515,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
                 <div class="media-meta">${type}</div>
                 <div class="media-actions">
                     <button class="button media-action-btn" data-action="select">
-                        ${item.Type === 'Series' ? 'Browse Episodes' : item.Type === 'MusicAlbum' ? 'View Tracks' : 'Play'}
+                        ${item.Type === 'Series' ? 'Browse Episodes' : item.Type === 'MusicAlbum' ? 'View Tracks' : item.Type === 'Playlist' ? 'View Items' : 'Play'}
                     </button>
                     <button class="button secondary media-action-btn" data-action="open-jellyfin">
                         Jellyfin
@@ -582,7 +588,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
                 <div class="media-meta">${type}</div>
                 <div class="media-actions">
                     <button class="button search-action-btn" data-action="select">
-                        ${hint.Type === 'Series' ? 'Browse Episodes' : hint.Type === 'MusicAlbum' ? 'View Tracks' : 'Play'}
+                        ${hint.Type === 'Series' ? 'Browse Episodes' : hint.Type === 'MusicAlbum' ? 'View Tracks' : hint.Type === 'Playlist' ? 'View Items' : 'Play'}
                     </button>
                     <button class="button secondary search-action-btn" data-action="open-jellyfin">
                         Open in Jellyfin
@@ -636,6 +642,9 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       if (item.Type === 'Series') {
         debugLog('Item is a Series, showing episode selection');
         this.showEpisodeSelection(item);
+      } else if (item.Type === 'Playlist') {
+        debugLog('Item is a Playlist, showing playlist items');
+        this.showPlaylistItems(item);
       } else if (item.Type === 'MusicAlbum') {
         debugLog('Item is a MusicAlbum, showing album tracks');
         this.showAlbumTracks(item);
@@ -950,6 +959,44 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       } catch (error) {
         debugLog('Error loading music:', error);
         container.innerHTML = '<div class="error">Failed to load music</div>';
+      }
+    },
+
+    async loadPlaylists() {
+      if (!this.currentServer || !this.currentUser) return;
+
+      const container = document.getElementById('playlistsList');
+      container.innerHTML = '<div class="loading">Loading playlists...</div>';
+
+      try {
+        const params = new URLSearchParams({
+          userId: this.currentUser.Id,
+          IncludeItemTypes: 'Playlist',
+          Recursive: true,
+          SortBy: 'SortName',
+          SortOrder: 'Ascending',
+          Fields:
+            'Overview,UserData,RunTimeTicks,ProductionYear,ImageTags,BackdropImageTags,ChildCount',
+          EnableImageTypes: 'Primary,Backdrop,Thumb',
+          Limit: 100,
+        });
+
+        const fullUrl = `${this.currentServer.url}/Users/${this.currentUser.Id}/Items?${params.toString()}`;
+
+        const response = await this.getHttpClient().get(fullUrl, {
+          headers: {
+            'X-Emby-Token': this.currentServer.accessToken,
+          },
+        });
+
+        if (response.data && response.data.Items && response.data.Items.length > 0) {
+          this.renderMediaList(response.data.Items, container);
+        } else {
+          container.innerHTML = '<div class="empty-state">No playlists found</div>';
+        }
+      } catch (error) {
+        debugLog('Error loading playlists:', error);
+        container.innerHTML = '<div class="error">Failed to load playlists</div>';
       }
     },
 
@@ -1327,9 +1374,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       }
 
       debugLog('Playing all album tracks, count:', this.albumTracks.length);
-      // Play first track, subsequent tracks will need to be handled by IINA's playlist
-      const firstTrack = this.albumTracks[0];
-      this.playMedia(firstTrack);
+      this.playQueue(this.albumTracks, this.selectedAlbum?.Name || 'Album');
     },
 
     openAlbumInJellyfin() {
@@ -1347,6 +1392,192 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       document.getElementById('albumTracksList').innerHTML = '';
       document.getElementById('playAllTracksBtn').disabled = true;
       document.getElementById('openAlbumInJellyfinBtn').disabled = true;
+    },
+
+    async showPlaylistItems(playlist) {
+      debugLog('showPlaylistItems called for playlist:', playlist.Name);
+
+      document.getElementById('playlistItemsSection').style.display = 'block';
+      document.getElementById('mainContent').style.display = 'none';
+      document.getElementById('playlistItemsTitle').textContent = playlist.Name || 'Playlist Items';
+
+      this.selectedPlaylist = playlist;
+      this.playlistItems = [];
+      document.getElementById('playAllPlaylistItemsBtn').disabled = true;
+      document.getElementById('openPlaylistInJellyfinBtn').disabled = false;
+
+      const itemsList = document.getElementById('playlistItemsList');
+      itemsList.innerHTML = '<div class="loading">Loading playlist items...</div>';
+
+      try {
+        const params = new URLSearchParams({
+          userId: this.currentUser.Id,
+          fields:
+            'RunTimeTicks,MediaSources,Path,UserData,ImageTags,BackdropImageTags,AlbumArtist,Artists,SeriesName,ParentIndexNumber,IndexNumber,Album,AlbumId,ChildCount',
+          enableImages: 'true',
+          imageTypeLimit: 1,
+          enableImageTypes: 'Primary,Thumb,Backdrop',
+          limit: 500,
+        });
+
+        const fullUrl = `${this.currentServer.url}/Playlists/${playlist.Id}/Items?${params.toString()}`;
+
+        const response = await this.getHttpClient().get(fullUrl, {
+          headers: {
+            'X-Emby-Token': this.currentServer.accessToken,
+          },
+        });
+
+        if (response.data && response.data.Items && response.data.Items.length > 0) {
+          this.playlistItems = response.data.Items;
+          this.renderPlaylistItems(response.data.Items, itemsList);
+          document.getElementById('playAllPlaylistItemsBtn').disabled = false;
+        } else {
+          itemsList.innerHTML = '<div class="empty-state">No items found in playlist</div>';
+        }
+      } catch (error) {
+        debugLog('Error loading playlist items:', error);
+        itemsList.innerHTML = '<div class="error">Failed to load playlist items</div>';
+      }
+    },
+
+    renderPlaylistItems(items, container) {
+      container.innerHTML = '';
+
+      items.forEach((item, index) => {
+        const itemEl = document.createElement('div');
+        itemEl.className = 'playlist-entry';
+        itemEl.dataset.itemId = item.Id;
+
+        const title = item.Name || `Item ${index + 1}`;
+        const duration = this.formatRuntime(item.RunTimeTicks);
+        const subtitle = this.getPlaylistEntrySubtitle(item);
+        const thumbUrl = this.getThumbnailUrl(item, 120);
+
+        const thumbHtml = thumbUrl
+          ? `<div class="ep-thumb-wrapper">
+               <img class="ep-thumb" src="${thumbUrl}" loading="lazy" alt="" onerror="this.parentElement.classList.add('thumb-fallback'); this.style.display='none';" />
+             </div>`
+          : '<div class="ep-thumb-wrapper thumb-fallback"></div>';
+
+        itemEl.innerHTML = `
+          <span class="track-number">${index + 1}</span>
+          ${thumbHtml}
+          <div class="ep-body">
+            <span class="ep-title">${title}</span>
+            ${subtitle ? `<span class="track-artist">${subtitle}</span>` : ''}
+          </div>
+          ${duration ? `<span class="ep-duration">${duration}</span>` : ''}
+        `;
+
+        itemEl.addEventListener('click', () => {
+          document
+            .querySelectorAll('.playlist-entry')
+            .forEach((el) => el.classList.remove('selected'));
+          itemEl.classList.add('selected');
+          this.playMedia(item);
+        });
+
+        container.appendChild(itemEl);
+      });
+    },
+
+    getPlaylistEntrySubtitle(item) {
+      if (item.Type === 'Episode' && item.SeriesName) {
+        const season = item.ParentIndexNumber || '?';
+        const episode = item.IndexNumber || '?';
+        return `${item.SeriesName} - S${season}E${episode}`;
+      }
+
+      if (item.Type === 'Audio') {
+        const artist = item.AlbumArtist || item.Artists?.join(', ') || '';
+        const album = item.Album || '';
+        return [artist, album].filter(Boolean).join(' — ');
+      }
+
+      if (item.Type === 'Movie') {
+        return 'Movie';
+      }
+
+      if (item.Type === 'MusicAlbum') {
+        return item.AlbumArtist || 'Album';
+      }
+
+      return item.Type || '';
+    },
+
+    hidePlaylistItems() {
+      document.getElementById('playlistItemsSection').style.display = 'none';
+      document.getElementById('mainContent').style.display = 'block';
+      this.selectedPlaylist = null;
+      this.playlistItems = [];
+      document.getElementById('playlistItemsList').innerHTML = '';
+      document.getElementById('playAllPlaylistItemsBtn').disabled = true;
+      document.getElementById('openPlaylistInJellyfinBtn').disabled = true;
+    },
+
+    playAllPlaylistItems() {
+      if (!this.playlistItems || this.playlistItems.length === 0) {
+        debugLog('No playlist items to play');
+        return;
+      }
+
+      debugLog('Playing playlist items, count:', this.playlistItems.length);
+      this.playQueue(this.playlistItems, this.selectedPlaylist?.Name || 'Playlist');
+    },
+
+    openPlaylistInJellyfin() {
+      if (this.selectedPlaylist) {
+        this.openInJellyfin(this.selectedPlaylist);
+      }
+    },
+
+    buildPlayableQueue(items) {
+      if (!items || items.length === 0) {
+        return [];
+      }
+
+      return items
+        .filter(
+          (item) =>
+            item &&
+            item.Id &&
+            !item.IsFolder &&
+            !['Playlist', 'Series', 'MusicAlbum', 'BoxSet', 'CollectionFolder'].includes(item.Type)
+        )
+        .map((item) => ({
+          itemId: item.Id,
+          itemType: item.Type,
+          title: item.Name || 'Unknown Title',
+          streamUrl: `${this.currentServer.url}/Items/${item.Id}/Download?api_key=${this.currentServer.accessToken}`,
+        }));
+    },
+
+    playQueue(items, title) {
+      const queueItems = this.buildPlayableQueue(items);
+      if (queueItems.length === 0) {
+        debugLog('No playable queue items found');
+        iina.core.osd('No playable items found');
+        return;
+      }
+
+      if (typeof iina !== 'undefined' && iina.postMessage) {
+        iina.postMessage('play-media', {
+          title: title || queueItems[0].title,
+          streamUrl: queueItems[0].streamUrl,
+          queueItems,
+        });
+
+        if (document.getElementById('albumTracksSection').style.display !== 'none') {
+          this.hideAlbumTracks();
+        }
+
+        if (document.getElementById('playlistItemsSection').style.display !== 'none') {
+          this.hidePlaylistItems();
+        }
+      } else {
+        window.open(queueItems[0].streamUrl, '_blank');
+      }
     },
 
     async playMedia(item) {
