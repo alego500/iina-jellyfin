@@ -353,7 +353,7 @@ window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(
           headers: {
             'Content-Type': 'application/json',
             Authorization:
-              'MediaBrowser Client="IINA Jellyfin Plugin", Device="IINA", DeviceId="IINA-Jellyfin-Plugin", Version="0.4.0"',
+              'MediaBrowser Client="IINA Jellyfin Plugin by alego500", Device="IINA", DeviceId="IINA-Jellyfin-Plugin", Version="0.6.1"',
           },
         });
 
@@ -443,7 +443,7 @@ window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(
             headers: {
               'Content-Type': 'application/json',
               Authorization:
-                'MediaBrowser Client="IINA Jellyfin Plugin", Device="IINA", DeviceId="IINA-Jellyfin-Plugin", Version="0.4.0"',
+                'MediaBrowser Client="IINA Jellyfin Plugin by alego500", Device="IINA", DeviceId="IINA-Jellyfin-Plugin", Version="0.6.1"',
             },
             data: JSON.stringify({ Secret: this.qcSecret }),
           }
@@ -664,7 +664,7 @@ window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(
             'Content-Type': 'application/json',
             Accept: 'application/json',
             Authorization:
-              'MediaBrowser Client="IINA Jellyfin Plugin", Device="IINA", DeviceId="IINA-Jellyfin-Plugin", Version="0.4.0"',
+              'MediaBrowser Client="IINA Jellyfin Plugin by alego500", Device="IINA", DeviceId="IINA-Jellyfin-Plugin", Version="0.6.1"',
           },
           data: JSON.stringify(authData),
         });

@@ -2,6 +2,8 @@
  * IINA Jellyfin Plugin
  */
 
+const fs = require('fs');
+
 const { createDebugLogger } = require('./lib/debug-log.js');
 const { createJellyfinApi } = require('./lib/jellyfin-api.js');
 const { createServerSessionStore } = require('./lib/server-session-store.js');
@@ -349,6 +351,23 @@ function openInNewInstance(streamUrl, title) {
   }
 }
 
+function sanitizePlaylistTitle(title) {
+  return (
+    String(title || 'Unknown Title').replace(/[\r\n]+/g, ' ').trim() || 'Unknown Title'
+  );
+}
+
+function buildM3uPlaylist(queueItems) {
+  const lines = ['#EXTM3U'];
+
+  queueItems.forEach((item) => {
+    lines.push(`#EXTINF:-1,${sanitizePlaylistTitle(item.title)}`);
+    lines.push(item.streamUrl);
+  });
+
+  return `${lines.join('\n')}\n`;
+}
+
 function loadQueueInCurrentWindow(queueItems, title) {
   if (!queueItems || queueItems.length === 0) {
     throw new Error('Queue is empty');
@@ -367,15 +386,25 @@ function loadQueueInCurrentWindow(queueItems, title) {
     debugLog(`Could not clear playlist before opening queue: ${clearError.message}`);
   }
 
-  queueItems.forEach((item, index) => {
-    const action = index === 0 ? 'replace' : 'append-play';
-    const itemTitle = item.title || (index === 0 ? title : null);
-    const args = [item.streamUrl, action];
-    if (itemTitle) {
-      args.push('-1', `force-media-title=${itemTitle}`);
-    }
-    mpv.command('loadfile', args);
-  });
+  const tempPlaylistPath = utils.resolvePath(
+    `@tmp/jellyfin_queue_${Date.now()}_${Math.floor(Math.random() * 100000)}.m3u8`
+  );
+
+  try {
+    fs.writeFileSync(tempPlaylistPath, buildM3uPlaylist(queueItems), 'utf8');
+    mpv.command('loadlist', [tempPlaylistPath, 'replace']);
+  } catch (error) {
+    debugLog(`Failed to load titled playlist file: ${error.message}`);
+    queueItems.forEach((item, index) => {
+      const action = index === 0 ? 'replace' : 'append';
+      const itemTitle = item.title || (index === 0 ? title : null);
+      const args = [item.streamUrl, action];
+      if (itemTitle) {
+        args.push('-1', `force-media-title=${itemTitle}`);
+      }
+      mpv.command('loadfile', args);
+    });
+  }
 }
 
 /**

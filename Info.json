@@ -1,11 +1,11 @@
 {
-  "name": "Jellyfin",
-  "identifier": "com.mhajder.iina-jellyfin",
-  "version": "0.6.0",
+  "name": "Jellyfin by alego500",
+  "identifier": "com.alego500.iina-jellyfin",
+  "version": "0.6.1",
   "description": "Jellyfin plugin for IINA, enabling seamless media playback and subtitle management.",
   "author": {
-    "name": "Mateusz Hajder",
-    "url": "https://github.com/mhajder"
+    "name": "alego500",
+    "url": "https://github.com/alego500"
   },
   "entry": "src/index.js",
   "globalEntry": "src/global.js",
@@ -33,6 +33,6 @@
     "autoplay_next_episode": true,
     "sync_playback_progress": true
   },
-  "ghRepo": "mhajder/iina-jellyfin",
+  "ghRepo": "alego500/iina-jellyfin",
   "ghVersion": 7
 }

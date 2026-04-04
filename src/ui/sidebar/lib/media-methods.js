@@ -1413,7 +1413,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         const params = new URLSearchParams({
           userId: this.currentUser.Id,
           fields:
-            'RunTimeTicks,MediaSources,Path,UserData,ImageTags,BackdropImageTags,AlbumArtist,Artists,SeriesName,ParentIndexNumber,IndexNumber,Album,AlbumId,ChildCount',
+            'RunTimeTicks,MediaSources,Path,UserData,ImageTags,BackdropImageTags,AlbumArtist,Artists,SeriesName,ParentIndexNumber,IndexNumber,Album,AlbumId,ChildCount,ProductionYear',
           enableImages: 'true',
           imageTypeLimit: 1,
           enableImageTypes: 'Primary,Thumb,Backdrop',
@@ -1532,6 +1532,41 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       }
     },
 
+    getPlaybackTitle(item) {
+      if (!item) {
+        return 'Unknown Title';
+      }
+
+      if (item.Type === 'Episode' && item.SeriesName) {
+        const season = Number(item.ParentIndexNumber);
+        const episode = Number(item.IndexNumber);
+        let title = item.SeriesName;
+
+        if (Number.isFinite(season) && Number.isFinite(episode)) {
+          title += ` S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
+        }
+
+        if (item.Name) {
+          title += ` - ${item.Name}`;
+        }
+
+        return title;
+      }
+
+      if (item.Type === 'Movie' && item.ProductionYear) {
+        return `${item.Name || 'Unknown Title'} (${item.ProductionYear})`;
+      }
+
+      if (item.Type === 'Audio') {
+        const artist = item.AlbumArtist || item.Artists?.join(', ') || '';
+        if (artist && item.Name) {
+          return `${artist} - ${item.Name}`;
+        }
+      }
+
+      return item.Name || 'Unknown Title';
+    },
+
     buildPlayableQueue(items) {
       if (!items || items.length === 0) {
         return [];
@@ -1548,7 +1583,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         .map((item) => ({
           itemId: item.Id,
           itemType: item.Type,
-          title: item.Name || 'Unknown Title',
+          title: this.getPlaybackTitle(item),
           streamUrl: `${this.currentServer.url}/Items/${item.Id}/Download?api_key=${this.currentServer.accessToken}`,
         }));
     },
@@ -1597,7 +1632,7 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           debugLog('Sending play-media message to main plugin');
           iina.postMessage('play-media', {
             streamUrl: streamUrl,
-            title: item.Name || 'Unknown Title',
+            title: this.getPlaybackTitle(item),
           });
 
           if (document.getElementById('episodeSection').style.display !== 'none') {

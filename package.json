@@ -1,17 +1,17 @@
 {
   "name": "iina-jellyfin",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Jellyfin plugin for IINA, enabling seamless media playback and subtitle management.",
-  "homepage": "https://github.com/mhajder/iina-jellyfin",
+  "homepage": "https://github.com/alego500/iina-jellyfin",
   "bugs": {
-    "url": "https://github.com/mhajder/iina-jellyfin/issues"
+    "url": "https://github.com/alego500/iina-jellyfin/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/mhajder/iina-jellyfin.git"
+    "url": "https://github.com/alego500/iina-jellyfin.git"
   },
   "license": "GPL-3.0-only",
-  "author": "Mateusz Hajder",
+  "author": "alego500",
   "type": "module",
   "scripts": {
     "format": "prettier --check .",
