@@ -25,6 +25,7 @@ const {
   standaloneWindow,
   playlist,
 } = iina;
+const { URL, URLSearchParams } = globalThis;
 
 let isReplacingPlayback = false; // Guard to prevent spurious stop reports during file switch
 
@@ -370,6 +371,192 @@ function buildM3uPlaylist(queueItems) {
   return `${lines.join('\n')}\n`;
 }
 
+function parseJellyfinWebUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const pathname = parsed.pathname || '';
+    const hash = parsed.hash || '';
+
+    if (!pathname.startsWith('/web/')) {
+      return null;
+    }
+
+    const route = hash.replace(/^#!/, '').replace(/^#/, '');
+    if (!route) {
+      return null;
+    }
+
+    const normalizedRoute = route.startsWith('/') ? route : `/${route}`;
+    const [routePath, routeQuery = ''] = normalizedRoute.split('?');
+    const params = new URLSearchParams(routeQuery);
+    const itemId = params.get('id');
+
+    if (routePath !== '/details' || !itemId) {
+      return null;
+    }
+
+    return {
+      serverBase: parsed.origin,
+      itemId,
+      routePath,
+    };
+  } catch (error) {
+    debugLog(`Failed to parse Jellyfin web URL: ${error.message}`);
+    return null;
+  }
+}
+
+function findStoredServerAuth(serverBase) {
+  const normalizedServerBase = String(serverBase || '').replace(/\/$/, '');
+  const storedServers = loadStoredServers();
+
+  return (
+    storedServers.find((server) => server.serverUrl.replace(/\/$/, '') === normalizedServerBase) || null
+  );
+}
+
+function getQueueItemTitle(item) {
+  if (!item) {
+    return 'Unknown Title';
+  }
+
+  if (item.Type === 'Episode' && item.SeriesName) {
+    const season = Number(item.ParentIndexNumber);
+    const episode = Number(item.IndexNumber);
+    let resolvedTitle = item.SeriesName;
+
+    if (Number.isFinite(season) && Number.isFinite(episode)) {
+      resolvedTitle += ` S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
+    }
+
+    if (item.Name) {
+      resolvedTitle += ` - ${item.Name}`;
+    }
+
+    return resolvedTitle;
+  }
+
+  if (item.Type === 'Movie' && item.ProductionYear) {
+    return `${item.Name || 'Unknown Title'} (${item.ProductionYear})`;
+  }
+
+  if (item.Type === 'Audio') {
+    const artist = item.AlbumArtist || item.Artists?.join(', ') || '';
+    if (artist && item.Name) {
+      return `${artist} - ${item.Name}`;
+    }
+  }
+
+  return item.Name || 'Unknown Title';
+}
+
+function buildStreamUrl(serverBase, itemId, apiKey) {
+  return `${serverBase}/Items/${itemId}/Download?api_key=${encodeURIComponent(apiKey)}`;
+}
+
+function buildPlayableQueue(items, serverBase, apiKey) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return [];
+  }
+
+  return items
+    .filter(
+      (item) =>
+        item &&
+        item.Id &&
+        !item.IsFolder &&
+        !['Playlist', 'Series', 'MusicAlbum', 'BoxSet', 'CollectionFolder'].includes(item.Type)
+    )
+    .map((item) => ({
+      itemId: item.Id,
+      itemType: item.Type,
+      title: getQueueItemTitle(item),
+      streamUrl: buildStreamUrl(serverBase, item.Id, apiKey),
+    }));
+}
+
+async function fetchPlaylistQueue(serverBase, playlistId, accessToken, userId) {
+  const params = new URLSearchParams({
+    fields: 'Path,MediaSources,Overview,ProductionYear,IndexNumber,ParentIndexNumber,SeriesName',
+  });
+
+  if (userId) {
+    params.set('userId', userId);
+  }
+
+  const response = await http.get(`${serverBase}/Playlists/${playlistId}/Items?${params.toString()}`, {
+    headers: buildJellyfinHeaders(accessToken, {
+      Accept: 'application/json',
+      'X-Emby-Token': accessToken,
+    }),
+  });
+
+  const items = response?.data?.Items || [];
+  return buildPlayableQueue(items, serverBase, accessToken);
+}
+
+async function resolveJellyfinOpenUrl(url) {
+  if (!url) {
+    return null;
+  }
+
+  const parsedWebUrl = parseJellyfinWebUrl(url);
+  if (!parsedWebUrl) {
+    return null;
+  }
+
+  const storedServer = findStoredServerAuth(parsedWebUrl.serverBase);
+  if (!storedServer?.accessToken) {
+    debugLog(`No stored Jellyfin auth found for ${parsedWebUrl.serverBase}`);
+    core.osd('No Jellyfin login found for this server');
+    return null;
+  }
+
+  const metadata = await fetchItemMetadata(
+    parsedWebUrl.serverBase,
+    parsedWebUrl.itemId,
+    storedServer.accessToken
+  );
+
+  if (!metadata?.Id || !metadata?.Type) {
+    return null;
+  }
+
+  if (metadata.Type === 'Playlist') {
+    const queueItems = await fetchPlaylistQueue(
+      parsedWebUrl.serverBase,
+      metadata.Id,
+      storedServer.accessToken,
+      storedServer.userId
+    );
+
+    if (queueItems.length === 0) {
+      core.osd('Playlist has no playable items');
+      return null;
+    }
+
+    const tempPlaylistPath = utils.resolvePath(
+      `@tmp/jellyfin_open_url_${metadata.Id}_${Date.now()}.m3u8`
+    );
+    fs.writeFileSync(tempPlaylistPath, buildM3uPlaylist(queueItems), 'utf8');
+
+    return {
+      resolvedUrl: tempPlaylistPath,
+      title: metadata.Name || 'Playlist',
+    };
+  }
+
+  if (['Movie', 'Episode', 'Audio', 'MusicVideo', 'Video'].includes(metadata.Type)) {
+    return {
+      resolvedUrl: buildStreamUrl(parsedWebUrl.serverBase, metadata.Id, storedServer.accessToken),
+      title: getQueueItemTitle(metadata),
+    };
+  }
+
+  core.osd(`Unsupported Jellyfin item type: ${metadata.Type}`);
+  return null;
+}
+
 function loadQueueInCurrentWindow(queueItems, title) {
   if (!queueItems || queueItems.length === 0) {
     throw new Error('Queue is empty');
@@ -513,6 +700,29 @@ function handlePlayMedia(message) {
 }
 
 // Event handlers
+mpv.addHook('on_load', 50, async (next) => {
+  try {
+    const currentUrl = mpv.getString('stream-open-filename');
+    const resolvedOpen = await resolveJellyfinOpenUrl(currentUrl);
+
+    if (resolvedOpen?.resolvedUrl) {
+      debugLog(`Resolved Jellyfin web URL to playable target: ${resolvedOpen.resolvedUrl}`);
+      mpv.set('stream-open-filename', resolvedOpen.resolvedUrl);
+      if (resolvedOpen.title) {
+        try {
+          mpv.set('force-media-title', resolvedOpen.title);
+        } catch (titleError) {
+          debugLog(`Could not set media title during on_load: ${titleError.message}`);
+        }
+      }
+    }
+  } catch (error) {
+    debugLog(`Failed to resolve Jellyfin open URL: ${error.message}`);
+  }
+
+  next();
+});
+
 event.on('iina.file-loaded', onFileLoaded);
 
 // Playback tracking events for Jellyfin progress sync
