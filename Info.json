@@ -28,6 +28,7 @@
     "show_notifications": false,
     "debug_logging": false,
     "set_video_title": true,
+    "warmup_playlist_titles": false,
     "open_in_new_window": true,
     "auto_login_enabled": true,
     "autoplay_next_episode": true,
