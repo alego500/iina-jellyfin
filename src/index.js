@@ -29,6 +29,7 @@ let isReplacingPlayback = false; // Guard to prevent spurious stop reports durin
 let pendingResolvedQueue = null;
 let isHandlingLoadFailure = false;
 let pendingPostLoadTaskId = 0;
+let prefetchedQueueTitles = {};
 
 const debugLog = createDebugLogger(preferences, console);
 
@@ -95,7 +96,6 @@ const { setupAutoplayForEpisode, resetForNewFile, clearQueuedFlag, isQueued } =
   });
 
 const {
-  buildVideoTitleFromMetadata,
   setVideoTitleFromMetadata,
   downloadAllSubtitles,
   manualDownloadSubtitles,
@@ -156,8 +156,22 @@ function onFileLoaded(fileUrl) {
       }
 
       if (preferences.get('set_video_title')) {
-        debugLog(`Setting video title from metadata for: ${jellyfinInfo.itemId}`);
-        await setVideoTitleFromMetadata(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
+        const prefetchedTitle = prefetchedQueueTitles[jellyfinInfo.itemId];
+        if (prefetchedTitle) {
+          debugLog(`Applying prefetched queue title for: ${jellyfinInfo.itemId}`);
+          try {
+            mpv.set('force-media-title', prefetchedTitle);
+          } catch (titleError) {
+            debugLog(`Failed to apply prefetched queue title: ${titleError.message}`);
+          }
+        } else {
+          debugLog(`Setting video title from metadata for: ${jellyfinInfo.itemId}`);
+          await setVideoTitleFromMetadata(
+            jellyfinInfo.serverBase,
+            jellyfinInfo.itemId,
+            jellyfinInfo.apiKey
+          );
+        }
       }
 
       if (taskId !== pendingPostLoadTaskId) {
@@ -544,30 +558,15 @@ function buildPlayableQueue(items, serverBase, apiKey) {
     }));
 }
 
-async function enrichQueueTitles(queueItems, apiKey) {
-  if (!preferences.get('set_video_title') || !Array.isArray(queueItems) || queueItems.length === 0) {
-    return queueItems;
-  }
-
-  return Promise.all(
-    queueItems.map(async (item) => {
-      if (!item?.itemId || !item?.streamUrl) {
-        return item;
-      }
-
-      try {
-        const metadata = await fetchItemMetadata(item.serverBase, item.itemId, apiKey);
-        const resolvedTitle = buildVideoTitleFromMetadata(metadata);
-        return {
-          ...item,
-          title: resolvedTitle || item.title,
-        };
-      } catch (error) {
-        debugLog(`Failed to prefetch queue title for ${item.itemId}: ${error.message}`);
-        return item;
-      }
-    })
-  );
+function storePrefetchedQueueTitles(queueItems) {
+  prefetchedQueueTitles = Array.isArray(queueItems)
+    ? queueItems.reduce((acc, item) => {
+        if (item?.itemId && item?.title) {
+          acc[item.itemId] = item.title;
+        }
+        return acc;
+      }, {})
+    : {};
 }
 
 async function fetchPlaylistQueue(serverBase, playlistId, accessToken, userId) {
@@ -584,8 +583,7 @@ async function fetchPlaylistQueue(serverBase, playlistId, accessToken, userId) {
   });
 
   const items = response?.data?.Items || [];
-  const queueItems = buildPlayableQueue(items, serverBase, accessToken);
-  return enrichQueueTitles(queueItems, accessToken);
+  return buildPlayableQueue(items, serverBase, accessToken);
 }
 
 async function resolveJellyfinOpenUrl(url) {
@@ -671,12 +669,8 @@ async function loadQueueInCurrentWindow(queueItems, title) {
     `@tmp/jellyfin_queue_${Date.now()}_${Math.floor(Math.random() * 100000)}.m3u8`
   );
   const shouldBootstrapWindow = Boolean(core?.status?.idle);
-  const apiKey = (() => {
-    const firstUrl = queueItems[0]?.streamUrl || '';
-    const params = parseQueryString(firstUrl.split('?')[1] || '');
-    return params.api_key || '';
-  })();
-  const titledQueue = await enrichQueueTitles(queueItems, apiKey);
+  const titledQueue = queueItems;
+  storePrefetchedQueueTitles(titledQueue);
 
   try {
     fs.writeFileSync(tempPlaylistPath, buildM3uPlaylist(titledQueue), 'utf8');
@@ -713,6 +707,7 @@ function appendPendingQueueItems(queueItems, title) {
 
   try {
     const remainingItems = queueItems.slice(1);
+    storePrefetchedQueueTitles(queueItems);
     const tempPlaylistPath = utils.resolvePath(
       `@tmp/jellyfin_open_url_queue_${Date.now()}_${Math.floor(Math.random() * 100000)}.m3u8`
     );

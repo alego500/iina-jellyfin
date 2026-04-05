@@ -138,6 +138,35 @@ function createServerSessionStore({ preferences, sidebar, log }) {
     try {
       log(`Storing Jellyfin session data for: ${serverBase}`);
 
+      const normalizedUrl = String(serverBase || '').replace(/\/$/, '');
+      const servers = loadStoredServers();
+      const matchingServer = servers.find(
+        (server) => server.serverUrl.replace(/\/$/, '') === normalizedUrl
+      );
+
+      if (matchingServer) {
+        if (matchingServer.accessToken !== apiKey) {
+          addOrUpdateServer({
+            serverUrl: matchingServer.serverUrl,
+            accessToken: apiKey,
+            serverName: matchingServer.serverName,
+            userId: matchingServer.userId,
+            username: matchingServer.username,
+          });
+        } else {
+          log(`Reusing existing Jellyfin session for: ${matchingServer.serverName}`);
+        }
+
+        if (sidebar && sidebar.postMessage) {
+          sidebar.postMessage('session-available', {
+            serverUrl: matchingServer.serverUrl,
+            accessToken: apiKey,
+            serverId: matchingServer.id,
+          });
+        }
+        return;
+      }
+
       const server = addOrUpdateServer({
         serverUrl: serverBase,
         accessToken: apiKey,
