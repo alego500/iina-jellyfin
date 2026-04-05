@@ -560,6 +560,12 @@ body {
   margin-bottom: 0;
 }
 
+.section-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 /* Episode picker */
 .episode-section {
   display: none;

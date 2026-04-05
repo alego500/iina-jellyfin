@@ -351,14 +351,14 @@
       <!-- Album Track Selection -->
       <div id="albumTracksSection" class="episode-section">
         <div class="section-title" id="albumTracksTitle">Album Tracks</div>
-        <div id="albumTracksList" class="episode-list">
-          <div class="loading">Loading tracks...</div>
-        </div>
-        <div style="display: flex; gap: 8px; margin-top: 8px">
+        <div class="section-actions">
           <button id="playAllTracksBtn" class="button" disabled>Play All</button>
           <button id="openAlbumInJellyfinBtn" class="button secondary" disabled>
             Open in Jellyfin
           </button>
+        </div>
+        <div id="albumTracksList" class="episode-list">
+          <div class="loading">Loading tracks...</div>
         </div>
         <button id="cancelAlbumTracksBtn" class="button secondary" style="margin-top: 8px">
           Back
@@ -368,14 +368,14 @@
       <!-- Playlist Item Selection -->
       <div id="playlistItemsSection" class="episode-section">
         <div class="section-title" id="playlistItemsTitle">Playlist Items</div>
-        <div id="playlistItemsList" class="episode-list">
-          <div class="loading">Loading playlist items...</div>
-        </div>
-        <div style="display: flex; gap: 8px; margin-top: 8px">
+        <div class="section-actions">
           <button id="playAllPlaylistItemsBtn" class="button" disabled>Play All</button>
           <button id="openPlaylistInJellyfinBtn" class="button secondary" disabled>
             Open in Jellyfin
           </button>
+        </div>
+        <div id="playlistItemsList" class="episode-list">
+          <div class="loading">Loading playlist items...</div>
         </div>
         <button id="cancelPlaylistItemsBtn" class="button secondary" style="margin-top: 8px">
           Back
