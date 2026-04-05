@@ -30,6 +30,7 @@ let pendingResolvedQueue = null;
 let isHandlingLoadFailure = false;
 let pendingPostLoadTaskId = 0;
 let prefetchedQueueTitles = {};
+const QUEUE_TITLE_PREFETCH_CONCURRENCY = 2;
 
 const debugLog = createDebugLogger(preferences, console);
 
@@ -96,6 +97,7 @@ const { setupAutoplayForEpisode, resetForNewFile, clearQueuedFlag, isQueued } =
   });
 
 const {
+  buildVideoTitleFromMetadata,
   setVideoTitleFromMetadata,
   downloadAllSubtitles,
   manualDownloadSubtitles,
@@ -125,7 +127,7 @@ function onFileLoaded(fileUrl) {
       loadedUrl: fileUrl,
       queueLength: pendingResolvedQueue.queueItems?.length || 0,
     });
-    appendPendingQueueItems(pendingResolvedQueue.queueItems, pendingResolvedQueue.queueTitle);
+    void appendPendingQueueItems(pendingResolvedQueue.queueItems, pendingResolvedQueue.queueTitle);
     pendingResolvedQueue = null;
   }
 
@@ -569,6 +571,51 @@ function storePrefetchedQueueTitles(queueItems) {
     : {};
 }
 
+async function enrichQueueTitles(queueItems) {
+  if (!preferences.get('set_video_title') || !Array.isArray(queueItems) || queueItems.length === 0) {
+    return queueItems;
+  }
+
+  const enrichedQueue = queueItems.map((item) => {
+    const prefetchedTitle = item?.itemId ? prefetchedQueueTitles[item.itemId] : null;
+    return prefetchedTitle ? { ...item, title: prefetchedTitle } : { ...item };
+  });
+
+  for (
+    let startIndex = 0;
+    startIndex < enrichedQueue.length;
+    startIndex += QUEUE_TITLE_PREFETCH_CONCURRENCY
+  ) {
+    const batch = enrichedQueue.slice(startIndex, startIndex + QUEUE_TITLE_PREFETCH_CONCURRENCY);
+
+    await Promise.all(
+      batch.map(async (item) => {
+        if (!item?.itemId || !item?.serverBase || prefetchedQueueTitles[item.itemId]) {
+          return;
+        }
+
+        try {
+          const query = parseQueryString(item.streamUrl.split('?')[1] || '');
+          if (!query.api_key) {
+            return;
+          }
+
+          const metadata = await fetchItemMetadata(item.serverBase, item.itemId, query.api_key);
+          const resolvedTitle = buildVideoTitleFromMetadata(metadata);
+          if (resolvedTitle) {
+            item.title = resolvedTitle;
+            prefetchedQueueTitles[item.itemId] = resolvedTitle;
+          }
+        } catch (error) {
+          debugLog(`Failed to prefetch queue title for ${item.itemId}: ${error.message}`);
+        }
+      })
+    );
+  }
+
+  return enrichedQueue;
+}
+
 async function fetchPlaylistQueue(serverBase, playlistId, accessToken, userId) {
   const queryString = buildQueryString({
     fields: 'Path,MediaSources,Overview,ProductionYear,IndexNumber,ParentIndexNumber,SeriesName',
@@ -669,7 +716,7 @@ async function loadQueueInCurrentWindow(queueItems, title) {
     `@tmp/jellyfin_queue_${Date.now()}_${Math.floor(Math.random() * 100000)}.m3u8`
   );
   const shouldBootstrapWindow = Boolean(core?.status?.idle);
-  const titledQueue = queueItems;
+  const titledQueue = await enrichQueueTitles(queueItems);
   storePrefetchedQueueTitles(titledQueue);
 
   try {
@@ -700,13 +747,13 @@ async function loadQueueInCurrentWindow(queueItems, title) {
   }
 }
 
-function appendPendingQueueItems(queueItems, title) {
+async function appendPendingQueueItems(queueItems, title) {
   if (!Array.isArray(queueItems) || queueItems.length <= 1) {
     return;
   }
 
   try {
-    const remainingItems = queueItems.slice(1);
+    const remainingItems = await enrichQueueTitles(queueItems.slice(1));
     storePrefetchedQueueTitles(queueItems);
     const tempPlaylistPath = utils.resolvePath(
       `@tmp/jellyfin_open_url_queue_${Date.now()}_${Math.floor(Math.random() * 100000)}.m3u8`
