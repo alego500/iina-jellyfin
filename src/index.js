@@ -29,10 +29,6 @@ let isReplacingPlayback = false; // Guard to prevent spurious stop reports durin
 let pendingResolvedQueue = null;
 let isHandlingLoadFailure = false;
 let pendingPostLoadTaskId = 0;
-let prefetchedQueueTitles = {};
-const QUEUE_TITLE_PREFETCH_CONCURRENCY = 2;
-const PLAYLIST_TITLE_WARMUP_DELAY_MS = 120;
-let playlistTitleWarmup = null;
 
 const debugLog = createDebugLogger(preferences, console);
 
@@ -99,7 +95,6 @@ const { setupAutoplayForEpisode, resetForNewFile, clearQueuedFlag, isQueued } =
   });
 
 const {
-  buildVideoTitleFromMetadata,
   setVideoTitleFromMetadata,
   downloadAllSubtitles,
   manualDownloadSubtitles,
@@ -136,10 +131,6 @@ function onFileLoaded(fileUrl) {
   // Stop any existing playback tracking from previous file
   stopPlaybackTracking();
 
-  if (handlePlaylistTitleWarmupOnFileLoaded()) {
-    return;
-  }
-
   const jellyfinInfo = updateFromFileUrl(fileUrl);
   if (jellyfinInfo) {
     // Store session data for auto-login if enabled
@@ -164,22 +155,12 @@ function onFileLoaded(fileUrl) {
       }
 
       if (preferences.get('set_video_title')) {
-        const prefetchedTitle = prefetchedQueueTitles[jellyfinInfo.itemId];
-        if (prefetchedTitle) {
-          debugLog(`Applying prefetched queue title for: ${jellyfinInfo.itemId}`);
-          try {
-            mpv.set('force-media-title', prefetchedTitle);
-          } catch (titleError) {
-            debugLog(`Failed to apply prefetched queue title: ${titleError.message}`);
-          }
-        } else {
-          debugLog(`Setting video title from metadata for: ${jellyfinInfo.itemId}`);
-          await setVideoTitleFromMetadata(
-            jellyfinInfo.serverBase,
-            jellyfinInfo.itemId,
-            jellyfinInfo.apiKey
-          );
-        }
+        debugLog(`Setting video title from metadata for: ${jellyfinInfo.itemId}`);
+        await setVideoTitleFromMetadata(
+          jellyfinInfo.serverBase,
+          jellyfinInfo.itemId,
+          jellyfinInfo.apiKey
+        );
       }
 
       if (taskId !== pendingPostLoadTaskId) {
@@ -204,102 +185,6 @@ function onFileLoaded(fileUrl) {
       }
     }, 250);
   }
-}
-
-function initializePlaylistTitleWarmup(queueItems, startImmediately = false) {
-  if (
-    !preferences.get('set_video_title') ||
-    !preferences.get('warmup_playlist_titles') ||
-    !Array.isArray(queueItems) ||
-    queueItems.length <= 1
-  ) {
-    playlistTitleWarmup = null;
-    return;
-  }
-
-  playlistTitleWarmup = {
-    total: queueItems.length,
-    nextIndex: 1,
-    returning: false,
-    returnIndex: 0,
-    returnPaused: Boolean(core?.status?.paused),
-  };
-
-  debugLog(`Initialized playlist title warmup for ${queueItems.length} items`);
-
-  if (startImmediately) {
-    startPlaylistTitleWarmup();
-  }
-}
-
-function queuePlaylistTitleWarmupPlay(index) {
-  setTimeout(() => {
-    if (!playlistTitleWarmup) {
-      return;
-    }
-
-    try {
-      debugLog(`Playlist title warmup playing index ${index}`);
-      playlist.play(index);
-    } catch (error) {
-      debugLog(`Playlist title warmup failed to play index ${index}: ${error.message}`);
-      playlistTitleWarmup = null;
-    }
-  }, PLAYLIST_TITLE_WARMUP_DELAY_MS);
-}
-
-function startPlaylistTitleWarmup() {
-  if (!playlistTitleWarmup || playlistTitleWarmup.nextIndex >= playlistTitleWarmup.total) {
-    return;
-  }
-
-  try {
-    mpv.set('pause', true);
-  } catch (error) {
-    debugLog(`Could not pause during playlist title warmup: ${error.message}`);
-  }
-
-  queuePlaylistTitleWarmupPlay(playlistTitleWarmup.nextIndex);
-  playlistTitleWarmup.nextIndex += 1;
-}
-
-function handlePlaylistTitleWarmupOnFileLoaded() {
-  if (!playlistTitleWarmup) {
-    return false;
-  }
-
-  if (playlistTitleWarmup.returning) {
-    const shouldResume = !playlistTitleWarmup.returnPaused;
-    playlistTitleWarmup = null;
-
-    setTimeout(() => {
-      try {
-        core.seekTo(0);
-      } catch (error) {
-        debugLog(`Could not seek after playlist title warmup: ${error.message}`);
-      }
-
-      if (shouldResume) {
-        try {
-          mpv.set('pause', false);
-        } catch (error) {
-          debugLog(`Could not resume after playlist title warmup: ${error.message}`);
-        }
-      }
-    }, PLAYLIST_TITLE_WARMUP_DELAY_MS);
-
-    return false;
-  }
-
-  if (playlistTitleWarmup.nextIndex < playlistTitleWarmup.total) {
-    queuePlaylistTitleWarmupPlay(playlistTitleWarmup.nextIndex);
-    playlistTitleWarmup.nextIndex += 1;
-    return true;
-  }
-
-  playlistTitleWarmup.returning = true;
-  queuePlaylistTitleWarmupPlay(playlistTitleWarmup.returnIndex);
-  return true;
 }
 
 /**
@@ -662,62 +547,6 @@ function buildPlayableQueue(items, serverBase, apiKey) {
     }));
 }
 
-function storePrefetchedQueueTitles(queueItems) {
-  prefetchedQueueTitles = Array.isArray(queueItems)
-    ? queueItems.reduce((acc, item) => {
-        if (item?.itemId && item?.title) {
-          acc[item.itemId] = item.title;
-        }
-        return acc;
-      }, {})
-    : {};
-}
-
-async function enrichQueueTitles(queueItems) {
-  if (!preferences.get('set_video_title') || !Array.isArray(queueItems) || queueItems.length === 0) {
-    return queueItems;
-  }
-
-  const enrichedQueue = queueItems.map((item) => {
-    const prefetchedTitle = item?.itemId ? prefetchedQueueTitles[item.itemId] : null;
-    return prefetchedTitle ? { ...item, title: prefetchedTitle } : { ...item };
-  });
-
-  for (
-    let startIndex = 0;
-    startIndex < enrichedQueue.length;
-    startIndex += QUEUE_TITLE_PREFETCH_CONCURRENCY
-  ) {
-    const batch = enrichedQueue.slice(startIndex, startIndex + QUEUE_TITLE_PREFETCH_CONCURRENCY);
-
-    await Promise.all(
-      batch.map(async (item) => {
-        if (!item?.itemId || !item?.serverBase || prefetchedQueueTitles[item.itemId]) {
-          return;
-        }
-
-        try {
-          const query = parseQueryString(item.streamUrl.split('?')[1] || '');
-          if (!query.api_key) {
-            return;
-          }
-
-          const metadata = await fetchItemMetadata(item.serverBase, item.itemId, query.api_key);
-          const resolvedTitle = buildVideoTitleFromMetadata(metadata);
-          if (resolvedTitle) {
-            item.title = resolvedTitle;
-            prefetchedQueueTitles[item.itemId] = resolvedTitle;
-          }
-        } catch (error) {
-          debugLog(`Failed to prefetch queue title for ${item.itemId}: ${error.message}`);
-        }
-      })
-    );
-  }
-
-  return enrichedQueue;
-}
-
 async function fetchPlaylistQueue(serverBase, playlistId, accessToken, userId) {
   const queryString = buildQueryString({
     fields: 'Path,MediaSources,Overview,ProductionYear,IndexNumber,ParentIndexNumber,SeriesName',
@@ -818,9 +647,7 @@ async function loadQueueInCurrentWindow(queueItems, title) {
     `@tmp/jellyfin_queue_${Date.now()}_${Math.floor(Math.random() * 100000)}.m3u8`
   );
   const shouldBootstrapWindow = Boolean(core?.status?.idle);
-  const titledQueue = await enrichQueueTitles(queueItems);
-  storePrefetchedQueueTitles(titledQueue);
-  initializePlaylistTitleWarmup(titledQueue);
+  const titledQueue = queueItems;
 
   try {
     fs.writeFileSync(tempPlaylistPath, buildM3uPlaylist(titledQueue), 'utf8');
@@ -856,9 +683,7 @@ async function appendPendingQueueItems(queueItems, title) {
   }
 
   try {
-    const remainingItems = await enrichQueueTitles(queueItems.slice(1));
-    storePrefetchedQueueTitles(queueItems);
-    initializePlaylistTitleWarmup(queueItems, true);
+    const remainingItems = queueItems.slice(1);
     const tempPlaylistPath = utils.resolvePath(
       `@tmp/jellyfin_open_url_queue_${Date.now()}_${Math.floor(Math.random() * 100000)}.m3u8`
     );
@@ -1058,11 +883,6 @@ event.on('mpv.pause.changed', handlePauseChange);
 
 // Handle file ending (includes both natural end and replacement)
 event.on('mpv.end-file', () => {
-  if (playlistTitleWarmup) {
-    debugLog('Playlist title warmup in progress, skipping end-file handling');
-    return;
-  }
-
   const queuedForAutoplay = isQueued();
   debugLog(
     'mpv.end-file triggered, isReplacingPlayback=' +

@@ -377,7 +377,6 @@ function createMediaActionsManager({
   }
 
   return {
-    buildVideoTitleFromMetadata,
     setVideoTitleFromMetadata,
     downloadAllSubtitles,
     manualDownloadSubtitles,
