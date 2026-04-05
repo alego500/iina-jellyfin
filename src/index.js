@@ -28,6 +28,7 @@ const {
 let isReplacingPlayback = false; // Guard to prevent spurious stop reports during file switch
 let pendingResolvedQueue = null;
 let isHandlingLoadFailure = false;
+let pendingPostLoadTaskId = 0;
 
 const debugLog = createDebugLogger(preferences, console);
 
@@ -94,6 +95,7 @@ const { setupAutoplayForEpisode, resetForNewFile, clearQueuedFlag, isQueued } =
   });
 
 const {
+  buildVideoTitleFromMetadata,
   setVideoTitleFromMetadata,
   downloadAllSubtitles,
   manualDownloadSubtitles,
@@ -135,32 +137,50 @@ function onFileLoaded(fileUrl) {
     // Store session data for auto-login if enabled
     storeJellyfinSession(jellyfinInfo.serverBase, jellyfinInfo.apiKey);
 
-    // Start playback tracking for progress sync
-    if (preferences.get('sync_playback_progress')) {
-      debugLog(`Starting playback tracking for: ${jellyfinInfo.itemId}`);
-      startPlaybackTracking(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
-    }
+    const taskId = ++pendingPostLoadTaskId;
 
-    // Set video title from metadata if enabled
-    if (preferences.get('set_video_title')) {
-      debugLog(`Setting video title from metadata for: ${jellyfinInfo.itemId}`);
-      setVideoTitleFromMetadata(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
-    }
+    // Let playback settle before hitting Jellyfin with background metadata requests.
+    setTimeout(async () => {
+      if (taskId !== pendingPostLoadTaskId) {
+        debugLog(`Skipping stale post-load Jellyfin tasks for: ${jellyfinInfo.itemId}`);
+        return;
+      }
 
-    // Setup autoplay for TV episodes if enabled
-    if (preferences.get('autoplay_next_episode')) {
-      debugLog(`Setting up autoplay for episode (itemId): ${jellyfinInfo.itemId}`);
-      resetForNewFile();
-      setupAutoplayForEpisode(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
-    }
+      if (preferences.get('sync_playback_progress')) {
+        debugLog(`Starting playback tracking for: ${jellyfinInfo.itemId}`);
+        await startPlaybackTracking(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
+      }
 
-    // Only auto-download if enabled
-    if (preferences.get('auto_download_enabled')) {
-      debugLog(`Auto-downloading subtitles for: ${jellyfinInfo.itemId}`);
-      downloadAllSubtitles(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
-    } else {
-      debugLog('Auto download disabled, but Jellyfin URL stored for manual download');
-    }
+      if (taskId !== pendingPostLoadTaskId) {
+        return;
+      }
+
+      if (preferences.get('set_video_title')) {
+        debugLog(`Setting video title from metadata for: ${jellyfinInfo.itemId}`);
+        await setVideoTitleFromMetadata(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
+      }
+
+      if (taskId !== pendingPostLoadTaskId) {
+        return;
+      }
+
+      if (preferences.get('autoplay_next_episode')) {
+        debugLog(`Setting up autoplay for episode (itemId): ${jellyfinInfo.itemId}`);
+        resetForNewFile();
+        await setupAutoplayForEpisode(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
+      }
+
+      if (taskId !== pendingPostLoadTaskId) {
+        return;
+      }
+
+      if (preferences.get('auto_download_enabled')) {
+        debugLog(`Auto-downloading subtitles for: ${jellyfinInfo.itemId}`);
+        await downloadAllSubtitles(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
+      } else {
+        debugLog('Auto download disabled, but Jellyfin URL stored for manual download');
+      }
+    }, 250);
   }
 }
 
@@ -518,9 +538,36 @@ function buildPlayableQueue(items, serverBase, apiKey) {
     .map((item) => ({
       itemId: item.Id,
       itemType: item.Type,
+      serverBase,
       title: getQueueItemTitle(item),
       streamUrl: buildStreamUrl(serverBase, item.Id, apiKey),
     }));
+}
+
+async function enrichQueueTitles(queueItems, apiKey) {
+  if (!preferences.get('set_video_title') || !Array.isArray(queueItems) || queueItems.length === 0) {
+    return queueItems;
+  }
+
+  return Promise.all(
+    queueItems.map(async (item) => {
+      if (!item?.itemId || !item?.streamUrl) {
+        return item;
+      }
+
+      try {
+        const metadata = await fetchItemMetadata(item.serverBase, item.itemId, apiKey);
+        const resolvedTitle = buildVideoTitleFromMetadata(metadata);
+        return {
+          ...item,
+          title: resolvedTitle || item.title,
+        };
+      } catch (error) {
+        debugLog(`Failed to prefetch queue title for ${item.itemId}: ${error.message}`);
+        return item;
+      }
+    })
+  );
 }
 
 async function fetchPlaylistQueue(serverBase, playlistId, accessToken, userId) {
@@ -537,7 +584,8 @@ async function fetchPlaylistQueue(serverBase, playlistId, accessToken, userId) {
   });
 
   const items = response?.data?.Items || [];
-  return buildPlayableQueue(items, serverBase, accessToken);
+  const queueItems = buildPlayableQueue(items, serverBase, accessToken);
+  return enrichQueueTitles(queueItems, accessToken);
 }
 
 async function resolveJellyfinOpenUrl(url) {
@@ -601,7 +649,7 @@ async function resolveJellyfinOpenUrl(url) {
   return null;
 }
 
-function loadQueueInCurrentWindow(queueItems, title) {
+async function loadQueueInCurrentWindow(queueItems, title) {
   if (!queueItems || queueItems.length === 0) {
     throw new Error('Queue is empty');
   }
@@ -623,9 +671,15 @@ function loadQueueInCurrentWindow(queueItems, title) {
     `@tmp/jellyfin_queue_${Date.now()}_${Math.floor(Math.random() * 100000)}.m3u8`
   );
   const shouldBootstrapWindow = Boolean(core?.status?.idle);
+  const apiKey = (() => {
+    const firstUrl = queueItems[0]?.streamUrl || '';
+    const params = parseQueryString(firstUrl.split('?')[1] || '');
+    return params.api_key || '';
+  })();
+  const titledQueue = await enrichQueueTitles(queueItems, apiKey);
 
   try {
-    fs.writeFileSync(tempPlaylistPath, buildM3uPlaylist(queueItems), 'utf8');
+    fs.writeFileSync(tempPlaylistPath, buildM3uPlaylist(titledQueue), 'utf8');
     if (shouldBootstrapWindow) {
       debugLog(`Player is idle, opening queue playlist via core.open: ${tempPlaylistPath}`);
       core.open(tempPlaylistPath);
@@ -634,7 +688,7 @@ function loadQueueInCurrentWindow(queueItems, title) {
     }
   } catch (error) {
     debugLog(`Failed to load titled playlist file: ${error.message}`);
-    queueItems.forEach((item, index) => {
+    titledQueue.forEach((item, index) => {
       const useCoreOpenForFirstItem = shouldBootstrapWindow && index === 0;
       const action = index === 0 ? 'replace' : 'append';
       const itemTitle = item.title || (index === 0 ? title : null);
@@ -658,18 +712,31 @@ function appendPendingQueueItems(queueItems, title) {
   }
 
   try {
-    for (let index = 1; index < queueItems.length; index++) {
-      const item = queueItems[index];
-      const args = [item.streamUrl, 'append'];
-      const itemTitle = item.title || (index === 1 ? title : null);
-      if (itemTitle) {
-        args.push('-1', `force-media-title=${itemTitle}`);
-      }
-      mpv.command('loadfile', args);
-    }
-    debugLog(`Appended ${queueItems.length - 1} queue item(s) after resolving open URL`);
+    const remainingItems = queueItems.slice(1);
+    const tempPlaylistPath = utils.resolvePath(
+      `@tmp/jellyfin_open_url_queue_${Date.now()}_${Math.floor(Math.random() * 100000)}.m3u8`
+    );
+    fs.writeFileSync(tempPlaylistPath, buildM3uPlaylist(remainingItems), 'utf8');
+    mpv.command('loadlist', [tempPlaylistPath, 'append']);
+    debugLog(
+      `Appended ${remainingItems.length} queue item(s) via titled playlist after resolving open URL`
+    );
   } catch (error) {
-    debugLog(`Failed appending pending queue items: ${error.message}`);
+    debugLog(`Failed appending pending queue items via loadlist: ${error.message}`);
+    try {
+      for (let index = 1; index < queueItems.length; index++) {
+        const item = queueItems[index];
+        const args = [item.streamUrl, 'append'];
+        const itemTitle = item.title || (index === 1 ? title : null);
+        if (itemTitle) {
+          args.push('-1', `force-media-title=${itemTitle}`);
+        }
+        mpv.command('loadfile', args);
+      }
+      debugLog(`Fallback appended ${queueItems.length - 1} queue item(s) with loadfile`);
+    } catch (fallbackError) {
+      debugLog(`Failed fallback append of pending queue items: ${fallbackError.message}`);
+    }
   }
 }
 
@@ -688,7 +755,7 @@ function playResolvedOpen(resolvedOpen) {
 /**
  * Handle media playback requests from sidebar
  */
-function handlePlayMedia(message) {
+async function handlePlayMedia(message) {
   debugLog('HANDLE PLAY MEDIA CALLED');
   debugLog('handlePlayMedia called with message', {
     title: message?.title,
@@ -709,7 +776,7 @@ function handlePlayMedia(message) {
     if (openInNewWindow && normalizedQueue && normalizedQueue.length > 1) {
       debugLog('Playlist queue requested with open_in_new_window enabled, using current window');
       core.osd(`Opening playlist in current window: ${title}`);
-      loadQueueInCurrentWindow(normalizedQueue, title);
+      await loadQueueInCurrentWindow(normalizedQueue, title);
     } else if (openInNewWindow) {
       debugLog('Opening media in new instance: ' + streamUrl);
       core.osd(`Opening in new window: ${title}`);
@@ -718,7 +785,7 @@ function handlePlayMedia(message) {
       debugLog('Opening media in current window: ' + streamUrl);
       core.osd(`Opening: ${title}`);
       if (normalizedQueue && normalizedQueue.length > 1) {
-        loadQueueInCurrentWindow(normalizedQueue, title);
+        await loadQueueInCurrentWindow(normalizedQueue, title);
       } else {
         // Set replacement guard so end-file handler doesn't send spurious stop
         if (getCurrentPlaybackSession()) {

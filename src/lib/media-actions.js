@@ -15,6 +15,33 @@ function createMediaActionsManager({
   let lastJellyfinUrl = null;
   let lastItemId = null;
 
+  function buildVideoTitleFromMetadata(metadata) {
+    if (!metadata || !metadata.Name) {
+      return '';
+    }
+
+    let title = metadata.Name;
+
+    if (metadata.Type === 'Episode') {
+      const seriesName = metadata.SeriesName;
+      const seasonNumber = metadata.ParentIndexNumber;
+      const episodeNumber = metadata.IndexNumber;
+
+      if (seriesName) {
+        let episodeTitle = seriesName;
+        if (seasonNumber !== undefined && episodeNumber !== undefined) {
+          episodeTitle += ` S${seasonNumber.toString().padStart(2, '0')}E${episodeNumber.toString().padStart(2, '0')}`;
+        }
+        episodeTitle += ` - ${metadata.Name}`;
+        title = episodeTitle;
+      }
+    } else if (metadata.Type === 'Movie' && metadata.ProductionYear) {
+      title = `${metadata.Name} (${metadata.ProductionYear})`;
+    }
+
+    return title;
+  }
+
   async function setVideoTitleFromMetadata(serverBase, itemId, apiKey) {
     try {
       if (!preferences.get('set_video_title')) {
@@ -29,24 +56,7 @@ function createMediaActionsManager({
         return;
       }
 
-      let title = metadata.Name;
-
-      if (metadata.Type === 'Episode') {
-        const seriesName = metadata.SeriesName;
-        const seasonNumber = metadata.ParentIndexNumber;
-        const episodeNumber = metadata.IndexNumber;
-
-        if (seriesName) {
-          let episodeTitle = seriesName;
-          if (seasonNumber !== undefined && episodeNumber !== undefined) {
-            episodeTitle += ` S${seasonNumber.toString().padStart(2, '0')}E${episodeNumber.toString().padStart(2, '0')}`;
-          }
-          episodeTitle += ` - ${metadata.Name}`;
-          title = episodeTitle;
-        }
-      } else if (metadata.Type === 'Movie' && metadata.ProductionYear) {
-        title = `${metadata.Name} (${metadata.ProductionYear})`;
-      }
+      const title = buildVideoTitleFromMetadata(metadata);
 
       log(`Setting video title to: "${title}"`);
 
@@ -367,6 +377,7 @@ function createMediaActionsManager({
   }
 
   return {
+    buildVideoTitleFromMetadata,
     setVideoTitleFromMetadata,
     downloadAllSubtitles,
     manualDownloadSubtitles,
