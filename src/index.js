@@ -25,9 +25,9 @@ const {
   standaloneWindow,
   playlist,
 } = iina;
-const { URL, URLSearchParams } = globalThis;
-
 let isReplacingPlayback = false; // Guard to prevent spurious stop reports during file switch
+let pendingResolvedQueue = null;
+let isHandlingLoadFailure = false;
 
 const debugLog = createDebugLogger(preferences, console);
 
@@ -117,6 +117,15 @@ const {
  */
 function onFileLoaded(fileUrl) {
   debugLog(`File loaded: ${fileUrl}`);
+
+  if (pendingResolvedQueue) {
+    debugLog('Processing pending resolved queue after file load', {
+      loadedUrl: fileUrl,
+      queueLength: pendingResolvedQueue.queueItems?.length || 0,
+    });
+    appendPendingQueueItems(pendingResolvedQueue.queueItems, pendingResolvedQueue.queueTitle);
+    pendingResolvedQueue = null;
+  }
 
   // Stop any existing playback tracking from previous file
   stopPlaybackTracking();
@@ -373,9 +382,15 @@ function buildM3uPlaylist(queueItems) {
 
 function parseJellyfinWebUrl(url) {
   try {
-    const parsed = new URL(url);
-    const pathname = parsed.pathname || '';
-    const hash = parsed.hash || '';
+    const normalizedUrl = String(url || '').trim();
+    const match = normalizedUrl.match(/^(https?:\/\/[^/]+)(\/web\/[^#?]*)(#[^?]*\?[^#]*)?$/);
+    if (!match) {
+      return null;
+    }
+
+    const serverBase = match[1];
+    const pathname = match[2] || '';
+    const hash = match[3] || '';
 
     if (!pathname.startsWith('/web/')) {
       return null;
@@ -388,15 +403,15 @@ function parseJellyfinWebUrl(url) {
 
     const normalizedRoute = route.startsWith('/') ? route : `/${route}`;
     const [routePath, routeQuery = ''] = normalizedRoute.split('?');
-    const params = new URLSearchParams(routeQuery);
-    const itemId = params.get('id');
+    const params = parseQueryString(routeQuery);
+    const itemId = params.id;
 
     if (routePath !== '/details' || !itemId) {
       return null;
     }
 
     return {
-      serverBase: parsed.origin,
+      serverBase,
       itemId,
       routePath,
     };
@@ -404,6 +419,39 @@ function parseJellyfinWebUrl(url) {
     debugLog(`Failed to parse Jellyfin web URL: ${error.message}`);
     return null;
   }
+}
+
+function parseQueryString(queryString) {
+  return String(queryString || '')
+    .split('&')
+    .filter(Boolean)
+    .reduce((params, pair) => {
+      const separatorIndex = pair.indexOf('=');
+      const rawKey = separatorIndex >= 0 ? pair.slice(0, separatorIndex) : pair;
+      const rawValue = separatorIndex >= 0 ? pair.slice(separatorIndex + 1) : '';
+
+      try {
+        const key = decodeURIComponent(rawKey.replace(/\+/g, ' '));
+        const value = decodeURIComponent(rawValue.replace(/\+/g, ' '));
+        if (key) {
+          params[key] = value;
+        }
+      } catch (error) {
+        debugLog(`Failed to parse query parameter "${pair}": ${error.message}`);
+      }
+
+      return params;
+    }, {});
+}
+
+function buildQueryString(params) {
+  return Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(
+      ([key, value]) =>
+        `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`
+    )
+    .join('&');
 }
 
 function findStoredServerAuth(serverBase) {
@@ -476,15 +524,12 @@ function buildPlayableQueue(items, serverBase, apiKey) {
 }
 
 async function fetchPlaylistQueue(serverBase, playlistId, accessToken, userId) {
-  const params = new URLSearchParams({
+  const queryString = buildQueryString({
     fields: 'Path,MediaSources,Overview,ProductionYear,IndexNumber,ParentIndexNumber,SeriesName',
+    userId,
   });
 
-  if (userId) {
-    params.set('userId', userId);
-  }
-
-  const response = await http.get(`${serverBase}/Playlists/${playlistId}/Items?${params.toString()}`, {
+  const response = await http.get(`${serverBase}/Playlists/${playlistId}/Items?${queryString}`, {
     headers: buildJellyfinHeaders(accessToken, {
       Accept: 'application/json',
       'X-Emby-Token': accessToken,
@@ -500,8 +545,10 @@ async function resolveJellyfinOpenUrl(url) {
     return null;
   }
 
+  debugLog(`Attempting to resolve Jellyfin open URL: ${url}`);
   const parsedWebUrl = parseJellyfinWebUrl(url);
   if (!parsedWebUrl) {
+    debugLog(`URL did not match Jellyfin web details format: ${url}`);
     return null;
   }
 
@@ -535,14 +582,11 @@ async function resolveJellyfinOpenUrl(url) {
       return null;
     }
 
-    const tempPlaylistPath = utils.resolvePath(
-      `@tmp/jellyfin_open_url_${metadata.Id}_${Date.now()}.m3u8`
-    );
-    fs.writeFileSync(tempPlaylistPath, buildM3uPlaylist(queueItems), 'utf8');
-
     return {
-      resolvedUrl: tempPlaylistPath,
-      title: metadata.Name || 'Playlist',
+      resolvedUrl: queueItems[0].streamUrl,
+      title: queueItems[0].title || metadata.Name || 'Playlist',
+      queueItems,
+      queueTitle: metadata.Name || 'Playlist',
     };
   }
 
@@ -606,6 +650,39 @@ function loadQueueInCurrentWindow(queueItems, title) {
       }
     });
   }
+}
+
+function appendPendingQueueItems(queueItems, title) {
+  if (!Array.isArray(queueItems) || queueItems.length <= 1) {
+    return;
+  }
+
+  try {
+    for (let index = 1; index < queueItems.length; index++) {
+      const item = queueItems[index];
+      const args = [item.streamUrl, 'append'];
+      const itemTitle = item.title || (index === 1 ? title : null);
+      if (itemTitle) {
+        args.push('-1', `force-media-title=${itemTitle}`);
+      }
+      mpv.command('loadfile', args);
+    }
+    debugLog(`Appended ${queueItems.length - 1} queue item(s) after resolving open URL`);
+  } catch (error) {
+    debugLog(`Failed appending pending queue items: ${error.message}`);
+  }
+}
+
+function playResolvedOpen(resolvedOpen) {
+  if (!resolvedOpen?.resolvedUrl) {
+    return;
+  }
+
+  handlePlayMedia({
+    streamUrl: resolvedOpen.resolvedUrl,
+    title: resolvedOpen.title,
+    queueItems: resolvedOpen.queueItems,
+  });
 }
 
 /**
@@ -703,10 +780,18 @@ function handlePlayMedia(message) {
 mpv.addHook('on_load', 50, async (next) => {
   try {
     const currentUrl = mpv.getString('stream-open-filename');
+    debugLog(`on_load hook received URL: ${currentUrl}`);
     const resolvedOpen = await resolveJellyfinOpenUrl(currentUrl);
 
     if (resolvedOpen?.resolvedUrl) {
       debugLog(`Resolved Jellyfin web URL to playable target: ${resolvedOpen.resolvedUrl}`);
+      pendingResolvedQueue =
+        Array.isArray(resolvedOpen.queueItems) && resolvedOpen.queueItems.length > 1
+          ? {
+              queueItems: resolvedOpen.queueItems,
+              queueTitle: resolvedOpen.queueTitle || resolvedOpen.title || 'Playlist',
+            }
+          : null;
       mpv.set('stream-open-filename', resolvedOpen.resolvedUrl);
       if (resolvedOpen.title) {
         try {
@@ -718,6 +803,33 @@ mpv.addHook('on_load', 50, async (next) => {
     }
   } catch (error) {
     debugLog(`Failed to resolve Jellyfin open URL: ${error.message}`);
+  }
+
+  next();
+});
+
+mpv.addHook('on_load_fail', 50, async (next) => {
+  try {
+    if (isHandlingLoadFailure) {
+      next();
+      return;
+    }
+
+    const failedUrl = mpv.getString('stream-open-filename');
+    debugLog(`on_load_fail hook received URL: ${failedUrl}`);
+    const resolvedOpen = await resolveJellyfinOpenUrl(failedUrl);
+
+    if (resolvedOpen?.resolvedUrl) {
+      isHandlingLoadFailure = true;
+      try {
+        debugLog(`Recovering failed Jellyfin web URL load via handlePlayMedia: ${resolvedOpen.resolvedUrl}`);
+        playResolvedOpen(resolvedOpen);
+      } finally {
+        isHandlingLoadFailure = false;
+      }
+    }
+  } catch (error) {
+    debugLog(`Failed to recover Jellyfin open URL after load failure: ${error.message}`);
   }
 
   next();
