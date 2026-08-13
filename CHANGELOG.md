@@ -11,6 +11,34 @@
 
 * document playlist browsing and queue playback in README
 
+## [0.7.1](https://github.com/mhajder/iina-jellyfin/compare/v0.7.0...v0.7.1) (2026-08-07)
+
+
+### 🐛 Bug Fixes
+
+* remove deprecated sidebar permission ([#76](https://github.com/mhajder/iina-jellyfin/issues/76)) ([e2143c3](https://github.com/mhajder/iina-jellyfin/commit/e2143c3c5cc00e8c3143763b172a7c2fc4417bef))
+
+## [0.7.0](https://github.com/mhajder/iina-jellyfin/compare/v0.6.2...v0.7.0) (2026-07-02)
+
+
+### 🚀 Features
+
+* report playback to the connected account instead of URL api_key ([#67](https://github.com/mhajder/iina-jellyfin/issues/67)) ([bf09128](https://github.com/mhajder/iina-jellyfin/commit/bf0912810d2dab73d508cf5c381986fef9681b30))
+
+## [0.6.2](https://github.com/mhajder/iina-jellyfin/compare/v0.6.1...v0.6.2) (2026-05-22)
+
+
+### 🐛 Bug Fixes
+
+* resolve macOS sleep prevention and stale title bugs during playback ([#56](https://github.com/mhajder/iina-jellyfin/issues/56)) ([7a8a8d8](https://github.com/mhajder/iina-jellyfin/commit/7a8a8d8c6360e0ddf7bde9a2473a8ac536f64b32))
+
+## [0.6.1](https://github.com/mhajder/iina-jellyfin/compare/v0.6.0...v0.6.1) (2026-04-06)
+
+
+### 🐛 Bug Fixes
+
+* ensure correct episode transitions ([#45](https://github.com/mhajder/iina-jellyfin/issues/45)) ([37fc964](https://github.com/mhajder/iina-jellyfin/commit/37fc9647c9ce473c24042af4af3c407b64fa7bee))
+
 ## [0.6.0](https://github.com/mhajder/iina-jellyfin/compare/v0.5.0...v0.6.0) (2026-02-27)
 
 

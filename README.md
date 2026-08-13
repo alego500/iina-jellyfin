@@ -49,7 +49,7 @@ An comprehensive IINA plugin that provides Jellyfin media server integration, in
 1. Open IINA
 2. Go to Preferences → Plugins
 3. Click "Install from GitHub..."
-4. Paste `mhajder/iina-jellyfin` and click Install
+4. Paste `alego500/iina-jellyfin` and click Install
 5. The plugin will appear in IINA's Plugin preferences
 
 ## Getting Started
@@ -189,6 +189,7 @@ Access plugin settings through IINA → Preferences → Plugins → Jellyfin:
   - Reports current playback position to Jellyfin every 10 seconds
   - Automatically marks items as watched at 95% completion
   - Resume positions sync across all your devices
+- **Report to my connected account (ignore link's API key)**: When enabled, playback progress, resume, and watched status are reported to the Jellyfin account you're logged into via the browser sidebar, instead of the account whose `api_key` is embedded in the playing URL. Useful when several people open the same shared link (e.g. via Syncplay) — each viewer's progress records into their own account. Requires a logged-in server; falls back to the URL's `api_key` if none is connected.
 - **Show on-screen notifications**: Display OSD messages when subtitles are downloaded
 - **Preferred Languages**: Comma-separated language codes (e.g., `en,eng,pol,pl`)
 - **Download all available subtitles**: Download all subtitle tracks, ignoring language preferences

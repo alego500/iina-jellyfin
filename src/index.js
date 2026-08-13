@@ -29,6 +29,7 @@ let isReplacingPlayback = false; // Guard to prevent spurious stop reports durin
 let pendingResolvedQueue = null;
 let isHandlingLoadFailure = false;
 let pendingPostLoadTaskId = 0;
+let explicitQueueItemIds = [];
 
 const debugLog = createDebugLogger(preferences, console);
 
@@ -133,8 +134,44 @@ function onFileLoaded(fileUrl) {
 
   const jellyfinInfo = updateFromFileUrl(fileUrl);
   if (jellyfinInfo) {
-    // Store session data for auto-login if enabled
-    storeJellyfinSession(jellyfinInfo.serverBase, jellyfinInfo.apiKey);
+    const explicitQueueIndex = explicitQueueItemIds.indexOf(jellyfinInfo.itemId);
+    const isExplicitQueueItem = explicitQueueIndex !== -1;
+    if (isExplicitQueueItem) {
+      explicitQueueItemIds.splice(explicitQueueIndex, 1);
+    } else {
+      explicitQueueItemIds = [];
+    }
+
+    // Decide which credentials playback reporting (progress/resume/watched)
+    // should use. By default it's the api_key embedded in the playing URL, so
+    // it records into whoever owns that key. When "use_connected_account" is on
+    // and a server is logged in via the Jellyfin browser sidebar, report to
+    // that account instead — the item id still comes from the URL, only the
+    // server + token change. This lets several people open the SAME shared link
+    // (e.g. over Syncplay) while each records progress into their own account.
+    let reportServerBase = jellyfinInfo.serverBase;
+    let reportApiKey = jellyfinInfo.apiKey;
+    if (preferences.get('use_connected_account')) {
+      const session = getStoredJellyfinSession();
+      const sessionMatchesUrl =
+        session?.serverUrl?.replace(/\/$/, '') === jellyfinInfo.serverBase.replace(/\/$/, '');
+      if (session && session.accessToken && sessionMatchesUrl) {
+        reportServerBase = session.serverUrl;
+        reportApiKey = session.accessToken;
+        debugLog(
+          `Connected-account mode: reporting as ${session.username || session.serverName} @ ${reportServerBase} (ignoring URL api_key)`
+        );
+      } else if (session && session.accessToken) {
+        debugLog(
+          `Connected-account mode: active server ${session.serverUrl} does not match playback server ${jellyfinInfo.serverBase}; falling back to URL api_key`
+        );
+      } else {
+        debugLog('Connected-account mode ON but no logged-in server; falling back to URL api_key');
+      }
+    } else {
+      // Default behaviour: remember this URL's session for auto-login.
+      storeJellyfinSession(jellyfinInfo.serverBase, jellyfinInfo.apiKey);
+    }
 
     const taskId = ++pendingPostLoadTaskId;
 
@@ -147,7 +184,7 @@ function onFileLoaded(fileUrl) {
 
       if (preferences.get('sync_playback_progress')) {
         debugLog(`Starting playback tracking for: ${jellyfinInfo.itemId}`);
-        await startPlaybackTracking(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
+        await startPlaybackTracking(reportServerBase, jellyfinInfo.itemId, reportApiKey);
       }
 
       if (taskId !== pendingPostLoadTaskId) {
@@ -168,9 +205,17 @@ function onFileLoaded(fileUrl) {
       }
 
       if (preferences.get('autoplay_next_episode')) {
-        debugLog(`Setting up autoplay for episode (itemId): ${jellyfinInfo.itemId}`);
-        resetForNewFile();
-        await setupAutoplayForEpisode(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
+        if (isExplicitQueueItem) {
+          debugLog(`Skipping episodic autoplay for explicit queue item: ${jellyfinInfo.itemId}`);
+        } else {
+          debugLog(`Setting up autoplay for episode (itemId): ${jellyfinInfo.itemId}`);
+          resetForNewFile(jellyfinInfo.itemId);
+          await setupAutoplayForEpisode(
+            jellyfinInfo.serverBase,
+            jellyfinInfo.itemId,
+            jellyfinInfo.apiKey
+          );
+        }
       }
 
       if (taskId !== pendingPostLoadTaskId) {
@@ -179,7 +224,11 @@ function onFileLoaded(fileUrl) {
 
       if (preferences.get('auto_download_enabled')) {
         debugLog(`Auto-downloading subtitles for: ${jellyfinInfo.itemId}`);
-        await downloadAllSubtitles(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
+        await downloadAllSubtitles(
+          jellyfinInfo.serverBase,
+          jellyfinInfo.itemId,
+          jellyfinInfo.apiKey
+        );
       } else {
         debugLog('Auto download disabled, but Jellyfin URL stored for manual download');
       }
@@ -403,6 +452,12 @@ function buildM3uPlaylist(queueItems) {
   return `${lines.join('\n')}\n`;
 }
 
+function rememberExplicitQueueItems(queueItems) {
+  explicitQueueItemIds = Array.isArray(queueItems)
+    ? queueItems.map((item) => item?.itemId).filter(Boolean)
+    : [];
+}
+
 function parseJellyfinWebUrl(url) {
   try {
     const normalizedUrl = String(url || '').trim();
@@ -470,10 +525,7 @@ function parseQueryString(queryString) {
 function buildQueryString(params) {
   return Object.entries(params)
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
-    .map(
-      ([key, value]) =>
-        `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`
-    )
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
     .join('&');
 }
 
@@ -482,7 +534,8 @@ function findStoredServerAuth(serverBase) {
   const storedServers = loadStoredServers();
 
   return (
-    storedServers.find((server) => server.serverUrl.replace(/\/$/, '') === normalizedServerBase) || null
+    storedServers.find((server) => server.serverUrl.replace(/\/$/, '') === normalizedServerBase) ||
+    null
   );
 }
 
@@ -648,6 +701,7 @@ async function loadQueueInCurrentWindow(queueItems, title) {
   );
   const shouldBootstrapWindow = Boolean(core?.status?.idle);
   const titledQueue = queueItems;
+  rememberExplicitQueueItems(titledQueue);
 
   try {
     fs.writeFileSync(tempPlaylistPath, buildM3uPlaylist(titledQueue), 'utf8');
@@ -681,6 +735,8 @@ async function appendPendingQueueItems(queueItems, title) {
   if (!Array.isArray(queueItems) || queueItems.length <= 1) {
     return;
   }
+
+  rememberExplicitQueueItems(queueItems);
 
   try {
     const remainingItems = queueItems.slice(1);
@@ -758,6 +814,8 @@ async function handlePlayMedia(message) {
       if (normalizedQueue && normalizedQueue.length > 1) {
         await loadQueueInCurrentWindow(normalizedQueue, title);
       } else {
+        explicitQueueItemIds = [];
+
         // Set replacement guard so end-file handler doesn't send spurious stop
         if (getCurrentPlaybackSession()) {
           isReplacingPlayback = true;
@@ -774,20 +832,13 @@ async function handlePlayMedia(message) {
           debugLog(`Could not clear playlist before opening: ${clearError.message}`);
         }
 
-        // Use mpv loadfile with force-media-title to set the title atomically
-        // This prevents the stale title bug where the old title persists until
-        // the async setVideoTitleFromMetadata call completes
+        // We use core.open instead of mpv.command('loadfile') because core.open
+        // properly triggers IINA's native lifecycle and sleep prevention checks.
+        // Set force-media-title BEFORE core.open so mpv uses it when loadfile runs.
         if (title) {
-          try {
-            mpv.command('loadfile', [streamUrl, 'replace', '-1', `force-media-title=${title}`]);
-          } catch (error) {
-            debugLog(`mpv loadfile with title failed: ${error.message}, falling back to core.open`);
-            isReplacingPlayback = false;
-            core.open(streamUrl);
-          }
-        } else {
-          core.open(streamUrl);
+          mpv.set('force-media-title', title);
         }
+        core.open(streamUrl);
       }
     }
 
@@ -860,7 +911,9 @@ mpv.addHook('on_load_fail', 50, async (next) => {
     if (resolvedOpen?.resolvedUrl) {
       isHandlingLoadFailure = true;
       try {
-        debugLog(`Recovering failed Jellyfin web URL load via handlePlayMedia: ${resolvedOpen.resolvedUrl}`);
+        debugLog(
+          `Recovering failed Jellyfin web URL load via handlePlayMedia: ${resolvedOpen.resolvedUrl}`
+        );
         playResolvedOpen(resolvedOpen);
       } finally {
         isHandlingLoadFailure = false;
