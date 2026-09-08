@@ -560,6 +560,12 @@ body {
   margin-bottom: 0;
 }
 
+.section-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 /* Episode picker */
 .episode-section {
   display: none;
@@ -634,6 +640,30 @@ body {
   background: var(--jf-surface-alt);
   font-size: 11px;
   transition: all 0.15s ease;
+}
+
+.playlist-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--jf-border);
+  border-radius: 6px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  background: var(--jf-surface-alt);
+  font-size: 11px;
+  transition: all 0.15s ease;
+}
+
+.playlist-entry:hover {
+  background: #1e1e1e;
+  box-shadow: 0 1px 4px rgba(0, 164, 220, 0.15);
+}
+
+.playlist-entry.selected {
+  background: rgba(0, 164, 220, 0.18);
+  border-color: var(--jf-accent);
 }
 
 .track-item:hover {
