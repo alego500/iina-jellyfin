@@ -3,6 +3,9 @@
  */
 
 const fs = require('fs');
+const { createTitledQueue } = require('./lib/titled-queue.js');
+const { normalizeJellyfinAuthUrl } = require('./lib/auth-url.js');
+const { createWebUrlResolver } = require('./lib/web-url-resolver.js');
 
 const { createDebugLogger } = require('./lib/debug-log.js');
 const { createJellyfinApi } = require('./lib/jellyfin-api.js');
@@ -23,17 +26,40 @@ const {
   sidebar,
   global,
   standaloneWindow,
-  playlist,
 } = iina;
-let isReplacingPlayback = false; // Guard to prevent spurious stop reports during file switch
-let pendingResolvedQueue = null;
-let isHandlingLoadFailure = false;
-let pendingPostLoadTaskId = 0;
-let explicitQueueItemIds = [];
+
+// Guard to prevent spurious stop reports during a file switch. Stored as a
+// timestamp and expired after REPLACEMENT_GUARD_MS: if the expected end-file
+// never arrives (e.g. core.open failed), a stale guard must not swallow the
+// stop report of the next file that really does finish.
+let replacingPlaybackAt = 0;
+const REPLACEMENT_GUARD_MS = 10000;
+
+function markReplacingPlayback() {
+  replacingPlaybackAt = Date.now();
+}
+
+function consumeReplacementGuard() {
+  if (!replacingPlaybackAt) {
+    return false;
+  }
+
+  const age = Date.now() - replacingPlaybackAt;
+  replacingPlaybackAt = 0;
+
+  if (age > REPLACEMENT_GUARD_MS) {
+    debugLog(`Ignoring replacement guard set ${age}ms ago (expired)`);
+    return false;
+  }
+
+  return true;
+}
 
 const debugLog = createDebugLogger(preferences, console);
+const titledQueue = createTitledQueue({ fs, utils, mpv, log: debugLog });
 
 const {
+  getClientIdentity,
   buildJellyfinHeaders,
   parseJellyfinUrl,
   isJellyfinUrl,
@@ -60,6 +86,7 @@ const {
 } = createServerSessionStore({
   preferences,
   sidebar,
+  standaloneWindow,
   log: debugLog,
 });
 
@@ -68,9 +95,7 @@ debugLog('Jellyfin Subtitles Plugin loaded');
 const {
   startPlaybackTracking,
   stopPlaybackTracking,
-  handlePlaybackPositionChange,
   handlePauseChange,
-  markAsWatched,
   getCurrentPlaybackSession,
 } = createPlaybackTrackingManager({
   core,
@@ -115,33 +140,36 @@ const {
 });
 
 /**
+ * A connected account belongs to its complete server base URL, including its
+ * scheme and reverse proxy path. Keep the fork's stricter credential boundary.
+ */
+function isSameJellyfinHost(left, right) {
+  const hostOf = (url) => String(url || '').replace(/\/+$/, '');
+
+  const leftHost = hostOf(left);
+  return leftHost.length > 0 && leftHost === hostOf(right);
+}
+
+/**
  * Handle file loaded event
  */
 function onFileLoaded(fileUrl) {
+  // IINA can emit the original web URL even though mpv opened the resolved
+  // stream. Reporting and the deferred queue need the actual media URL.
+  if (resolvedWebLoad && mpv.getString('stream-open-filename') === resolvedWebLoad) {
+    fileUrl = resolvedWebLoad;
+  }
+  resolvedWebLoad = null;
   debugLog(`File loaded: ${fileUrl}`);
 
-  if (pendingResolvedQueue) {
-    debugLog('Processing pending resolved queue after file load', {
-      loadedUrl: fileUrl,
-      queueLength: pendingResolvedQueue.queueItems?.length || 0,
-    });
-    void appendPendingQueueItems(pendingResolvedQueue.queueItems, pendingResolvedQueue.queueTitle);
-    pendingResolvedQueue = null;
-  }
+  // The first item of a queued list is playing now, so the rest can be added
+  flushPendingPlaylistQueue(fileUrl);
 
   // Stop any existing playback tracking from previous file
   stopPlaybackTracking();
 
   const jellyfinInfo = updateFromFileUrl(fileUrl);
   if (jellyfinInfo) {
-    const explicitQueueIndex = explicitQueueItemIds.indexOf(jellyfinInfo.itemId);
-    const isExplicitQueueItem = explicitQueueIndex !== -1;
-    if (isExplicitQueueItem) {
-      explicitQueueItemIds.splice(explicitQueueIndex, 1);
-    } else {
-      explicitQueueItemIds = [];
-    }
-
     // Decide which credentials playback reporting (progress/resume/watched)
     // should use. By default it's the api_key embedded in the playing URL, so
     // it records into whoever owns that key. When "use_connected_account" is on
@@ -153,86 +181,56 @@ function onFileLoaded(fileUrl) {
     let reportApiKey = jellyfinInfo.apiKey;
     if (preferences.get('use_connected_account')) {
       const session = getStoredJellyfinSession();
-      const sessionMatchesUrl =
-        session?.serverUrl?.replace(/\/$/, '') === jellyfinInfo.serverBase.replace(/\/$/, '');
-      if (session && session.accessToken && sessionMatchesUrl) {
-        reportServerBase = session.serverUrl;
-        reportApiKey = session.accessToken;
-        debugLog(
-          `Connected-account mode: reporting as ${session.username || session.serverName} @ ${reportServerBase} (ignoring URL api_key)`
-        );
-      } else if (session && session.accessToken) {
-        debugLog(
-          `Connected-account mode: active server ${session.serverUrl} does not match playback server ${jellyfinInfo.serverBase}; falling back to URL api_key`
-        );
+      if (session && session.accessToken) {
+        // Only the credentials may change, never the item id — reporting a
+        // URL's item to a different server would 404 on every request.
+        if (isSameJellyfinHost(session.serverUrl, jellyfinInfo.serverBase)) {
+          reportServerBase = session.serverUrl;
+          reportApiKey = session.accessToken;
+          debugLog(
+            `Connected-account mode: reporting as ${session.username || session.serverName} @ ${reportServerBase} (ignoring URL api_key)`
+          );
+        } else {
+          debugLog(
+            `Connected-account mode ON but the logged-in server (${session.serverUrl}) is not the one in the URL (${jellyfinInfo.serverBase}); using URL api_key`
+          );
+        }
       } else {
         debugLog('Connected-account mode ON but no logged-in server; falling back to URL api_key');
       }
-    } else {
+    } else if (preferences.get('auto_login_enabled')) {
       // Default behaviour: remember this URL's session for auto-login.
       storeJellyfinSession(jellyfinInfo.serverBase, jellyfinInfo.apiKey);
+    } else {
+      debugLog('Auto-login from Jellyfin URLs disabled, not storing the URL credentials');
     }
 
-    const taskId = ++pendingPostLoadTaskId;
+    // Start playback tracking for progress sync
+    if (preferences.get('sync_playback_progress')) {
+      debugLog(`Starting playback tracking for: ${jellyfinInfo.itemId}`);
+      startPlaybackTracking(reportServerBase, jellyfinInfo.itemId, reportApiKey);
+    }
 
-    // Let playback settle before hitting Jellyfin with background metadata requests.
-    setTimeout(async () => {
-      if (taskId !== pendingPostLoadTaskId) {
-        debugLog(`Skipping stale post-load Jellyfin tasks for: ${jellyfinInfo.itemId}`);
-        return;
-      }
+    // Set video title from metadata if enabled
+    if (preferences.get('set_video_title')) {
+      debugLog(`Setting video title from metadata for: ${jellyfinInfo.itemId}`);
+      setVideoTitleFromMetadata(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
+    }
 
-      if (preferences.get('sync_playback_progress')) {
-        debugLog(`Starting playback tracking for: ${jellyfinInfo.itemId}`);
-        await startPlaybackTracking(reportServerBase, jellyfinInfo.itemId, reportApiKey);
-      }
+    // Setup autoplay for TV episodes if enabled
+    if (preferences.get('autoplay_next_episode') && !titledQueue.includes(fileUrl)) {
+      debugLog(`Setting up autoplay for episode (itemId): ${jellyfinInfo.itemId}`);
+      resetForNewFile(jellyfinInfo.itemId);
+      setupAutoplayForEpisode(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
+    }
 
-      if (taskId !== pendingPostLoadTaskId) {
-        return;
-      }
-
-      if (preferences.get('set_video_title')) {
-        debugLog(`Setting video title from metadata for: ${jellyfinInfo.itemId}`);
-        await setVideoTitleFromMetadata(
-          jellyfinInfo.serverBase,
-          jellyfinInfo.itemId,
-          jellyfinInfo.apiKey
-        );
-      }
-
-      if (taskId !== pendingPostLoadTaskId) {
-        return;
-      }
-
-      if (preferences.get('autoplay_next_episode')) {
-        if (isExplicitQueueItem) {
-          debugLog(`Skipping episodic autoplay for explicit queue item: ${jellyfinInfo.itemId}`);
-        } else {
-          debugLog(`Setting up autoplay for episode (itemId): ${jellyfinInfo.itemId}`);
-          resetForNewFile(jellyfinInfo.itemId);
-          await setupAutoplayForEpisode(
-            jellyfinInfo.serverBase,
-            jellyfinInfo.itemId,
-            jellyfinInfo.apiKey
-          );
-        }
-      }
-
-      if (taskId !== pendingPostLoadTaskId) {
-        return;
-      }
-
-      if (preferences.get('auto_download_enabled')) {
-        debugLog(`Auto-downloading subtitles for: ${jellyfinInfo.itemId}`);
-        await downloadAllSubtitles(
-          jellyfinInfo.serverBase,
-          jellyfinInfo.itemId,
-          jellyfinInfo.apiKey
-        );
-      } else {
-        debugLog('Auto download disabled, but Jellyfin URL stored for manual download');
-      }
-    }, 250);
+    // Only auto-download if enabled
+    if (preferences.get('auto_download_enabled')) {
+      debugLog(`Auto-downloading subtitles for: ${jellyfinInfo.itemId}`);
+      downloadAllSubtitles(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
+    } else {
+      debugLog('Auto download disabled, but Jellyfin URL stored for manual download');
+    }
   }
 }
 
@@ -240,25 +238,38 @@ function onFileLoaded(fileUrl) {
  * Show Jellyfin Browser - handles the case when no window is available
  */
 function showJellyfinBrowser() {
-  try {
-    debugLog('Attempting to show Jellyfin browser');
+  debugLog('Attempting to show Jellyfin browser');
 
-    // Try to show sidebar directly first
-    if (sidebar && sidebar.show) {
+  // The sidebar lives inside the player window, so it is only useful while that
+  // window is on screen. sidebar.show() cannot be used to detect that: it only
+  // throws while the window has never been loaded, and IINA keeps window.loaded
+  // true after the window is closed. Showing it then succeeds silently on an
+  // invisible window and the browser appears to do nothing until IINA restarts.
+  let windowAvailable = false;
+  try {
+    windowAvailable = Boolean(core.window && core.window.loaded && core.window.visible);
+  } catch (error) {
+    debugLog(`Could not read window state: ${error.message}`);
+  }
+
+  if (windowAvailable && sidebar && typeof sidebar.show === 'function') {
+    try {
       sidebar.show();
       debugLog('Sidebar shown successfully');
       return;
+    } catch (error) {
+      debugLog(`Direct sidebar.show() failed: ${error.message}`);
     }
-  } catch (error) {
-    debugLog(`Direct sidebar.show() failed: ${error.message}`);
-
-    // Check if we have stored session data that could be useful
-    const sessionData = getStoredJellyfinSession();
-
-    // Always open in standalone window when sidebar isn't available
-    debugLog('Opening Jellyfin browser in standalone window');
-    openJellyfinStandaloneWindow(sessionData);
+  } else {
+    debugLog(`No visible player window (windowAvailable=${windowAvailable}), using standalone`);
   }
+
+  // Sidebar missing or threw — fall back to a standalone window.
+  // Check if we have stored session data that could be useful.
+  const sessionData = getStoredJellyfinSession();
+
+  debugLog('Opening Jellyfin browser in standalone window');
+  openJellyfinStandaloneWindow(sessionData);
 }
 
 /**
@@ -271,20 +282,34 @@ function openJellyfinStandaloneWindow(sessionData) {
     // Load the same sidebar HTML in standalone window
     standaloneWindow.loadFile('src/ui/sidebar/index.html');
 
-    // Set window properties
-    standaloneWindow.setFrame({ x: 100, y: 100, width: 400, height: 600 });
-    standaloneWindow.setProperty('title', 'Jellyfin Browser');
-    standaloneWindow.setProperty('resizable', true);
-    standaloneWindow.setProperty('minimizable', true);
+    // Set window properties. setFrame takes four numbers (width, height, x, y)
+    // and setProperty a single object; anything else is silently ignored.
+    standaloneWindow.setFrame(400, 600, 100, 100);
+    standaloneWindow.setProperty({ title: 'Jellyfin Browser', resizable: true });
 
-    // Set up message handlers for standalone window
+    // Set up message handlers for standalone window.
+    // These must be registered after every loadFile() call and cannot be
+    // hoisted out of this function: standaloneWindow.loadFile() clears the
+    // window's message listeners (JavascriptAPIStandaloneWindow.loadFile ->
+    // messageHub.clearListeners), which would leave the webview unable to
+    // reach the plugin at all. Re-registering is safe because the message hub
+    // keys listeners by name and replaces the previous callback.
+    standaloneWindow.onMessage('get-client-identity', () => {
+      standaloneWindow.postMessage('client-identity', getClientIdentity());
+    });
+
     standaloneWindow.onMessage('get-session', () => {
-      standaloneWindow.postMessage('session-data', sessionData);
+      standaloneWindow.postMessage('session-data', getStoredJellyfinSession());
     });
 
     standaloneWindow.onMessage('play-media', (data) => {
       handlePlayMedia(data);
       // Close standalone window after starting playback
+      standaloneWindow.close();
+    });
+
+    standaloneWindow.onMessage('play-media-list', (data) => {
+      handlePlayMediaList(data);
       standaloneWindow.close();
     });
 
@@ -320,12 +345,8 @@ function openJellyfinStandaloneWindow(sessionData) {
 
     standaloneWindow.onMessage('remove-server', (data) => {
       if (data && data.serverId) {
+        // The store notifies both webviews itself
         removeServer(data.serverId);
-        // Also notify standalone window (removeServer only notifies sidebar)
-        standaloneWindow.postMessage('servers-updated', {
-          servers: loadStoredServers(),
-          activeServerId: getActiveServerId(),
-        });
       }
     });
 
@@ -351,6 +372,7 @@ function openJellyfinStandaloneWindow(sessionData) {
 
     // Send session data after a brief delay
     setTimeout(() => {
+      standaloneWindow.postMessage('client-identity', getClientIdentity());
       // Send multi-server list (sidebar will auto-connect to active server)
       const servers = loadStoredServers();
       const activeServerId = getActiveServerId();
@@ -383,9 +405,36 @@ menu.addItem(
     () => {
       showJellyfinBrowser();
     },
-    { keyBinding: 'Cmd+Shift+J' }
+    // mpv key binding format: Command is "Meta". Unknown modifier names are
+    // dropped silently, so "Cmd+Shift+J" would bind plain Shift+J and steal
+    // IINA's own "cycle subtitles backward" shortcut.
+    { keyBinding: 'Meta+Shift+j' }
   )
 );
+
+// Replies from the global entry are registered once at load. IINA has no off(),
+// and the reply can arrive at any time, so a per-request listener isn't possible.
+if (typeof global !== 'undefined' && global.onMessage) {
+  global.onMessage('player-created', (data) => {
+    debugLog('New player instance created', {
+      playerId: data?.playerId,
+      title: data?.title,
+      url: data?.url,
+    });
+    if (data?.title) {
+      core.osd(`Opened in new window: ${data.title}`);
+    }
+  });
+
+  global.onMessage('player-creation-failed', (data) => {
+    debugLog('Failed to create new player instance: ' + data?.error);
+    core.osd('Failed to open new window - opening in current window');
+    // Fallback to current window
+    if (data?.url) {
+      core.open(data.url);
+    }
+  });
+}
 
 /**
  * Open media in a new IINA instance
@@ -393,453 +442,159 @@ menu.addItem(
 function openInNewInstance(streamUrl, title) {
   if (typeof global !== 'undefined' && global.postMessage) {
     debugLog('Requesting new player instance from global entry');
-
-    // Listen for response from global entry
-    const messageHandler = (name, data) => {
-      if (name === 'player-created') {
-        debugLog('New player instance created', {
-          playerId: data?.playerId,
-          title: data?.title,
-          url: data?.url,
-        });
-        core.osd(`Opened in new window: ${data.title}`);
-      } else if (name === 'player-creation-failed') {
-        debugLog('Failed to create new player instance: ' + data.error);
-        core.osd('Failed to open new window - opening in current window');
-        // Fallback to current window
-        core.open(streamUrl);
-      }
-    };
-
-    // Set up temporary listener (IINA doesn't have off() so we use this pattern)
-    const originalHandler = global.onMessage;
-    global.onMessage = (name, callback) => {
-      if (name === 'player-created' || name === 'player-creation-failed') {
-        return messageHandler(name, callback);
-      }
-      return originalHandler?.call(global, name, callback);
-    };
-
-    // Request new instance creation
     global.postMessage('create-player', { url: streamUrl, title: title });
-
-    // Clean up listener after 5 seconds
-    setTimeout(() => {
-      global.onMessage = originalHandler;
-    }, 5000);
   } else {
     debugLog('Global entry not available, opening in current window');
     core.open(streamUrl);
   }
 }
 
-function sanitizePlaylistTitle(title) {
-  return (
-    String(title || 'Unknown Title')
-      .replace(/[\r\n]+/g, ' ')
-      .trim() || 'Unknown Title'
-  );
-}
+/**
+ * Open media in the current window, replacing what is playing
+ */
+function openInCurrentWindow(streamUrl, title) {
+  debugLog('Opening media in current window: ' + streamUrl);
 
-function buildM3uPlaylist(queueItems) {
-  const lines = ['#EXTM3U'];
-
-  queueItems.forEach((item) => {
-    lines.push(`#EXTINF:-1,${sanitizePlaylistTitle(item.title)}`);
-    lines.push(item.streamUrl);
-  });
-
-  return `${lines.join('\n')}\n`;
-}
-
-function rememberExplicitQueueItems(queueItems) {
-  explicitQueueItemIds = Array.isArray(queueItems)
-    ? queueItems.map((item) => item?.itemId).filter(Boolean)
-    : [];
-}
-
-function parseJellyfinWebUrl(url) {
-  try {
-    const normalizedUrl = String(url || '').trim();
-    const match = normalizedUrl.match(/^(https?:\/\/[^/]+)(\/web\/[^#?]*)(#[^?]*\?[^#]*)?$/);
-    if (!match) {
-      return null;
-    }
-
-    const serverBase = match[1];
-    const pathname = match[2] || '';
-    const hash = match[3] || '';
-
-    if (!pathname.startsWith('/web/')) {
-      return null;
-    }
-
-    const route = hash.replace(/^#!/, '').replace(/^#/, '');
-    if (!route) {
-      return null;
-    }
-
-    const normalizedRoute = route.startsWith('/') ? route : `/${route}`;
-    const [routePath, routeQuery = ''] = normalizedRoute.split('?');
-    const params = parseQueryString(routeQuery);
-    const itemId = params.id;
-
-    if (routePath !== '/details' || !itemId) {
-      return null;
-    }
-
-    return {
-      serverBase,
-      itemId,
-      routePath,
-    };
-  } catch (error) {
-    debugLog(`Failed to parse Jellyfin web URL: ${error.message}`);
-    return null;
-  }
-}
-
-function parseQueryString(queryString) {
-  return String(queryString || '')
-    .split('&')
-    .filter(Boolean)
-    .reduce((params, pair) => {
-      const separatorIndex = pair.indexOf('=');
-      const rawKey = separatorIndex >= 0 ? pair.slice(0, separatorIndex) : pair;
-      const rawValue = separatorIndex >= 0 ? pair.slice(separatorIndex + 1) : '';
-
-      try {
-        const key = decodeURIComponent(rawKey.replace(/\+/g, ' '));
-        const value = decodeURIComponent(rawValue.replace(/\+/g, ' '));
-        if (key) {
-          params[key] = value;
-        }
-      } catch (error) {
-        debugLog(`Failed to parse query parameter "${pair}": ${error.message}`);
-      }
-
-      return params;
-    }, {});
-}
-
-function buildQueryString(params) {
-  return Object.entries(params)
-    .filter(([, value]) => value !== undefined && value !== null && value !== '')
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
-    .join('&');
-}
-
-function findStoredServerAuth(serverBase) {
-  const normalizedServerBase = String(serverBase || '').replace(/\/$/, '');
-  const storedServers = loadStoredServers();
-
-  return (
-    storedServers.find((server) => server.serverUrl.replace(/\/$/, '') === normalizedServerBase) ||
-    null
-  );
-}
-
-function getQueueItemTitle(item) {
-  if (!item) {
-    return 'Unknown Title';
-  }
-
-  if (item.Type === 'Episode' && item.SeriesName) {
-    const season = Number(item.ParentIndexNumber);
-    const episode = Number(item.IndexNumber);
-    let resolvedTitle = item.SeriesName;
-
-    if (Number.isFinite(season) && Number.isFinite(episode)) {
-      resolvedTitle += ` S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
-    }
-
-    if (item.Name) {
-      resolvedTitle += ` - ${item.Name}`;
-    }
-
-    return resolvedTitle;
-  }
-
-  if (item.Type === 'Movie' && item.ProductionYear) {
-    return `${item.Name || 'Unknown Title'} (${item.ProductionYear})`;
-  }
-
-  if (item.Type === 'Audio') {
-    const artist = item.AlbumArtist || item.Artists?.join(', ') || '';
-    if (artist && item.Name) {
-      return `${artist} - ${item.Name}`;
-    }
-  }
-
-  return item.Name || 'Unknown Title';
-}
-
-function buildStreamUrl(serverBase, itemId, apiKey) {
-  return `${serverBase}/Items/${itemId}/Download?api_key=${encodeURIComponent(apiKey)}`;
-}
-
-function buildPlayableQueue(items, serverBase, apiKey) {
-  if (!Array.isArray(items) || items.length === 0) {
-    return [];
-  }
-
-  return items
-    .filter(
-      (item) =>
-        item &&
-        item.Id &&
-        !item.IsFolder &&
-        !['Playlist', 'Series', 'MusicAlbum', 'BoxSet', 'CollectionFolder'].includes(item.Type)
-    )
-    .map((item) => ({
-      itemId: item.Id,
-      itemType: item.Type,
-      serverBase,
-      title: getQueueItemTitle(item),
-      streamUrl: buildStreamUrl(serverBase, item.Id, apiKey),
-    }));
-}
-
-async function fetchPlaylistQueue(serverBase, playlistId, accessToken, userId) {
-  const queryString = buildQueryString({
-    fields: 'Path,MediaSources,Overview,ProductionYear,IndexNumber,ParentIndexNumber,SeriesName',
-    userId,
-  });
-
-  const response = await http.get(`${serverBase}/Playlists/${playlistId}/Items?${queryString}`, {
-    headers: buildJellyfinHeaders(accessToken, {
-      Accept: 'application/json',
-      'X-Emby-Token': accessToken,
-    }),
-  });
-
-  const items = response?.data?.Items || [];
-  return buildPlayableQueue(items, serverBase, accessToken);
-}
-
-async function resolveJellyfinOpenUrl(url) {
-  if (!url) {
-    return null;
-  }
-
-  debugLog(`Attempting to resolve Jellyfin open URL: ${url}`);
-  const parsedWebUrl = parseJellyfinWebUrl(url);
-  if (!parsedWebUrl) {
-    debugLog(`URL did not match Jellyfin web details format: ${url}`);
-    return null;
-  }
-
-  const storedServer = findStoredServerAuth(parsedWebUrl.serverBase);
-  if (!storedServer?.accessToken) {
-    debugLog(`No stored Jellyfin auth found for ${parsedWebUrl.serverBase}`);
-    core.osd('No Jellyfin login found for this server');
-    return null;
-  }
-
-  const metadata = await fetchItemMetadata(
-    parsedWebUrl.serverBase,
-    parsedWebUrl.itemId,
-    storedServer.accessToken
-  );
-
-  if (!metadata?.Id || !metadata?.Type) {
-    return null;
-  }
-
-  if (metadata.Type === 'Playlist') {
-    const queueItems = await fetchPlaylistQueue(
-      parsedWebUrl.serverBase,
-      metadata.Id,
-      storedServer.accessToken,
-      storedServer.userId
-    );
-
-    if (queueItems.length === 0) {
-      core.osd('Playlist has no playable items');
-      return null;
-    }
-
-    return {
-      resolvedUrl: queueItems[0].streamUrl,
-      title: queueItems[0].title || metadata.Name || 'Playlist',
-      queueItems,
-      queueTitle: metadata.Name || 'Playlist',
-    };
-  }
-
-  if (['Movie', 'Episode', 'Audio', 'MusicVideo', 'Video'].includes(metadata.Type)) {
-    return {
-      resolvedUrl: buildStreamUrl(parsedWebUrl.serverBase, metadata.Id, storedServer.accessToken),
-      title: getQueueItemTitle(metadata),
-    };
-  }
-
-  core.osd(`Unsupported Jellyfin item type: ${metadata.Type}`);
-  return null;
-}
-
-async function loadQueueInCurrentWindow(queueItems, title) {
-  if (!queueItems || queueItems.length === 0) {
-    throw new Error('Queue is empty');
-  }
-
+  // Set replacement guard so end-file handler doesn't send spurious stop
   if (getCurrentPlaybackSession()) {
-    isReplacingPlayback = true;
+    markReplacingPlayback();
   }
 
+  // Clear any previous playlist entries to prevent stale titles. IINA's
+  // playlist API has no clear(), so use mpv's own command — it drops every
+  // entry except the one currently playing, which core.open replaces below.
   try {
-    if (playlist && typeof playlist.clear === 'function') {
-      playlist.clear();
-    }
+    mpv.command('playlist-clear', []);
+    // Reset autoplay state when starting new playback
     clearQueuedFlag();
   } catch (clearError) {
-    debugLog(`Could not clear playlist before opening queue: ${clearError.message}`);
+    debugLog(`Could not clear playlist before opening: ${clearError.message}`);
   }
 
-  const tempPlaylistPath = utils.resolvePath(
-    `@tmp/jellyfin_queue_${Date.now()}_${Math.floor(Math.random() * 100000)}.m3u8`
-  );
-  const shouldBootstrapWindow = Boolean(core?.status?.idle);
-  const titledQueue = queueItems;
-  rememberExplicitQueueItems(titledQueue);
+  // We use core.open instead of mpv.command('loadfile') because core.open
+  // properly triggers IINA's native lifecycle and sleep prevention checks.
+  // Set force-media-title BEFORE core.open so mpv uses it when loadfile runs.
+  if (title) {
+    mpv.set('force-media-title', title);
+  }
+  core.open(streamUrl);
+}
+
+// Items waiting to join the playlist behind the one currently being opened.
+let pendingPlaylistQueue = null;
+let resolvedWebLoad = null;
+const PENDING_QUEUE_TTL_MS = 60000;
+const webUrlResolver = createWebUrlResolver({
+  http,
+  buildJellyfinHeaders,
+  fetchItemMetadata,
+  loadStoredServers,
+  getStoredJellyfinSession,
+});
+
+/**
+ * Append the items held back by handlePlayMediaList. Called once the first item
+ * of the list has actually loaded, so mpv's replacing load cannot discard them.
+ */
+function flushPendingPlaylistQueue(fileUrl) {
+  if (!pendingPlaylistQueue) {
+    return;
+  }
+
+  const { items, at, itemId } = pendingPlaylistQueue;
+  pendingPlaylistQueue = null;
+
+  if (Date.now() - at > PENDING_QUEUE_TTL_MS) {
+    debugLog('Queued playlist items are stale, not appending them');
+    return;
+  }
+
+  // Make sure this is the file the list started with. IINA percent-encodes the
+  // URL, so compare on the item id rather than the whole string.
+  if (itemId && fileUrl && !String(fileUrl).includes(itemId)) {
+    debugLog(`Loaded file is not the queued list's first item (${itemId}), dropping the queue`);
+    return;
+  }
 
   try {
-    fs.writeFileSync(tempPlaylistPath, buildM3uPlaylist(titledQueue), 'utf8');
-    if (shouldBootstrapWindow) {
-      debugLog(`Player is idle, opening queue playlist via core.open: ${tempPlaylistPath}`);
-      core.open(tempPlaylistPath);
+    titledQueue.append(items);
+    debugLog(`Appended ${items.length} queued item(s) to the playlist`);
+  } catch (error) {
+    debugLog('Could not append queued items: ' + error);
+  }
+}
+
+/**
+ * Handle a request to play several items in order (e.g. a whole album).
+ * A playlist only exists within one window, so this always plays in the
+ * current window regardless of the open_in_new_window preference.
+ */
+function handlePlayMediaList(message) {
+  const items = (message?.items || []).filter((item) => item && item.streamUrl);
+  debugLog(`handlePlayMediaList called with ${items.length} playable item(s)`);
+
+  if (items.length === 0) {
+    debugLog('No playable items in list');
+    core.osd('Nothing to play');
+    return;
+  }
+
+  const [firstItem, ...queuedItems] = items;
+  titledQueue.remember(items);
+
+  try {
+    if (queuedItems.length > 0) {
+      core.osd(`Playing ${items.length} tracks, starting with: ${firstItem.title}`);
     } else {
-      mpv.command('loadlist', [tempPlaylistPath, 'replace']);
+      core.osd(`Opening: ${firstItem.title}`);
     }
+
+    // The rest can only be appended once the first item has loaded. core.open()
+    // defers its mpv loadfile for network URLs while something is still
+    // playing (PlayerCore.open: it stores pendingUrl and closes the window
+    // first), and that load replaces the playlist — appending now would be
+    // wiped out a moment later.
+    // Playback URLs are /Videos/{id}/stream or /Audio/{id}/stream; /Items/ is
+    // still matched for links produced by earlier versions.
+    const firstItemId =
+      (String(firstItem.streamUrl).match(/\/(?:Items|Videos|Audio)\/([^/?]+)/) || [])[1] || null;
+    pendingPlaylistQueue =
+      queuedItems.length > 0 ? { items: queuedItems, at: Date.now(), itemId: firstItemId } : null;
+
+    openInCurrentWindow(firstItem.streamUrl, firstItem.title);
+
+    debugLog(`Holding ${queuedItems.length} item(s) until the first one loads`);
   } catch (error) {
-    debugLog(`Failed to load titled playlist file: ${error.message}`);
-    titledQueue.forEach((item, index) => {
-      const useCoreOpenForFirstItem = shouldBootstrapWindow && index === 0;
-      const action = index === 0 ? 'replace' : 'append';
-      const itemTitle = item.title || (index === 0 ? title : null);
-      if (useCoreOpenForFirstItem) {
-        debugLog(`Falling back to core.open for first queue item: ${item.streamUrl}`);
-        core.open(item.streamUrl);
-      } else {
-        const args = [item.streamUrl, action];
-        if (itemTitle) {
-          args.push('-1', `force-media-title=${itemTitle}`);
-        }
-        mpv.command('loadfile', args);
-      }
-    });
+    debugLog('Error playing media list: ' + error);
+    core.osd('Failed to play tracks');
   }
-}
-
-async function appendPendingQueueItems(queueItems, title) {
-  if (!Array.isArray(queueItems) || queueItems.length <= 1) {
-    return;
-  }
-
-  rememberExplicitQueueItems(queueItems);
-
-  try {
-    const remainingItems = queueItems.slice(1);
-    const tempPlaylistPath = utils.resolvePath(
-      `@tmp/jellyfin_open_url_queue_${Date.now()}_${Math.floor(Math.random() * 100000)}.m3u8`
-    );
-    fs.writeFileSync(tempPlaylistPath, buildM3uPlaylist(remainingItems), 'utf8');
-    mpv.command('loadlist', [tempPlaylistPath, 'append']);
-    debugLog(
-      `Appended ${remainingItems.length} queue item(s) via titled playlist after resolving open URL`
-    );
-  } catch (error) {
-    debugLog(`Failed appending pending queue items via loadlist: ${error.message}`);
-    try {
-      for (let index = 1; index < queueItems.length; index++) {
-        const item = queueItems[index];
-        const args = [item.streamUrl, 'append'];
-        const itemTitle = item.title || (index === 1 ? title : null);
-        if (itemTitle) {
-          args.push('-1', `force-media-title=${itemTitle}`);
-        }
-        mpv.command('loadfile', args);
-      }
-      debugLog(`Fallback appended ${queueItems.length - 1} queue item(s) with loadfile`);
-    } catch (fallbackError) {
-      debugLog(`Failed fallback append of pending queue items: ${fallbackError.message}`);
-    }
-  }
-}
-
-function playResolvedOpen(resolvedOpen) {
-  if (!resolvedOpen?.resolvedUrl) {
-    return;
-  }
-
-  handlePlayMedia({
-    streamUrl: resolvedOpen.resolvedUrl,
-    title: resolvedOpen.title,
-    queueItems: resolvedOpen.queueItems,
-  });
 }
 
 /**
  * Handle media playback requests from sidebar
  */
-async function handlePlayMedia(message) {
+function handlePlayMedia(message) {
   debugLog('HANDLE PLAY MEDIA CALLED');
   debugLog('handlePlayMedia called with message', {
     title: message?.title,
     streamUrl: message?.streamUrl,
-    queueLength: message?.queueItems?.length,
   });
-  const { streamUrl, title, queueItems } = message;
+  const { streamUrl, title } = message;
+  pendingPlaylistQueue = null;
+  titledQueue.remember([]);
   debugLog(`Opening media: ${title} - ${streamUrl}`);
 
   try {
     const openInNewWindow = preferences.get('open_in_new_window');
     debugLog('open_in_new_window preference: ' + openInNewWindow);
-    const normalizedQueue =
-      Array.isArray(queueItems) && queueItems.length > 0
-        ? queueItems.filter((item) => item && item.streamUrl)
-        : null;
 
-    if (openInNewWindow && normalizedQueue && normalizedQueue.length > 1) {
-      debugLog('Playlist queue requested with open_in_new_window enabled, using current window');
-      core.osd(`Opening playlist in current window: ${title}`);
-      await loadQueueInCurrentWindow(normalizedQueue, title);
-    } else if (openInNewWindow) {
+    if (openInNewWindow) {
       debugLog('Opening media in new instance: ' + streamUrl);
       core.osd(`Opening in new window: ${title}`);
       openInNewInstance(streamUrl, title);
     } else {
-      debugLog('Opening media in current window: ' + streamUrl);
       core.osd(`Opening: ${title}`);
-      if (normalizedQueue && normalizedQueue.length > 1) {
-        await loadQueueInCurrentWindow(normalizedQueue, title);
-      } else {
-        explicitQueueItemIds = [];
-
-        // Set replacement guard so end-file handler doesn't send spurious stop
-        if (getCurrentPlaybackSession()) {
-          isReplacingPlayback = true;
-        }
-
-        // Clear any previous playlist entries to prevent stale titles
-        try {
-          if (playlist && typeof playlist.clear === 'function') {
-            playlist.clear();
-          }
-          // Reset autoplay state when starting new playback
-          clearQueuedFlag();
-        } catch (clearError) {
-          debugLog(`Could not clear playlist before opening: ${clearError.message}`);
-        }
-
-        // We use core.open instead of mpv.command('loadfile') because core.open
-        // properly triggers IINA's native lifecycle and sleep prevention checks.
-        // Set force-media-title BEFORE core.open so mpv uses it when loadfile runs.
-        if (title) {
-          mpv.set('force-media-title', title);
-        }
-        core.open(streamUrl);
-      }
+      openInCurrentWindow(streamUrl, title);
     }
 
     debugLog('Successfully initiated media opening: ' + streamUrl);
@@ -847,89 +602,49 @@ async function handlePlayMedia(message) {
     debugLog('Error opening media: ' + error);
     core.osd('Failed to open media');
 
-    // Fallback: copy to clipboard as backup
-    try {
-      if (typeof core !== 'undefined' && core.setClipboard) {
-        core.setClipboard(streamUrl);
-        core.osd('Error opening - URL copied to clipboard');
-      } else if (typeof utils !== 'undefined' && utils.setClipboard) {
-        utils.setClipboard(streamUrl);
-        core.osd('Error opening - URL copied to clipboard');
-      } else {
-        core.osd('Failed to open - check console for URL');
-      }
-    } catch (clipboardError) {
-      debugLog('Both open and clipboard failed: ' + clipboardError);
-      core.osd('Failed to open media - check console');
-    }
+    // No clipboard API is exposed to plugins, so the URL only goes to the log
+    debugLog(`URL that failed to open: ${streamUrl}`);
   }
 }
 
 // Event handlers
 mpv.addHook('on_load', 50, async (next) => {
   try {
-    const currentUrl = mpv.getString('stream-open-filename');
-    debugLog(`on_load hook received URL: ${currentUrl}`);
-    const resolvedOpen = await resolveJellyfinOpenUrl(currentUrl);
-
-    if (resolvedOpen?.resolvedUrl) {
-      debugLog(`Resolved Jellyfin web URL to playable target: ${resolvedOpen.resolvedUrl}`);
-      pendingResolvedQueue =
-        Array.isArray(resolvedOpen.queueItems) && resolvedOpen.queueItems.length > 1
-          ? {
-              queueItems: resolvedOpen.queueItems,
-              queueTitle: resolvedOpen.queueTitle || resolvedOpen.title || 'Playlist',
-            }
-          : null;
-      mpv.set('stream-open-filename', resolvedOpen.resolvedUrl);
-      if (resolvedOpen.title) {
-        try {
-          mpv.set('force-media-title', resolvedOpen.title);
-        } catch (titleError) {
-          debugLog(`Could not set media title during on_load: ${titleError.message}`);
-        }
-      }
-    }
+    const url = mpv.getString('stream-open-filename');
+    const items = await webUrlResolver.resolve(url);
+    if (!items || mpv.getString('stream-open-filename') !== url) return;
+    const [first, ...rest] = items;
+    clearQueuedFlag();
+    titledQueue.remember(items);
+    pendingPlaylistQueue = rest.length
+      ? { items: rest, at: Date.now(), itemId: first.itemId }
+      : null;
+    mpv.set('force-media-title', first.title);
+    mpv.set('stream-open-filename', first.streamUrl);
+    resolvedWebLoad = first.streamUrl;
   } catch (error) {
-    debugLog(`Failed to resolve Jellyfin open URL: ${error.message}`);
+    debugLog('Could not resolve Jellyfin web link: ' + error.message);
+    core.osd('Could not open Jellyfin link; check the saved server login');
+  } finally {
+    next();
   }
-
-  next();
 });
 
-mpv.addHook('on_load_fail', 50, async (next) => {
+mpv.addHook('on_load', 10, (next) => {
   try {
-    if (isHandlingLoadFailure) {
-      next();
-      return;
-    }
-
-    const failedUrl = mpv.getString('stream-open-filename');
-    debugLog(`on_load_fail hook received URL: ${failedUrl}`);
-    const resolvedOpen = await resolveJellyfinOpenUrl(failedUrl);
-
-    if (resolvedOpen?.resolvedUrl) {
-      isHandlingLoadFailure = true;
-      try {
-        debugLog(
-          `Recovering failed Jellyfin web URL load via handlePlayMedia: ${resolvedOpen.resolvedUrl}`
-        );
-        playResolvedOpen(resolvedOpen);
-      } finally {
-        isHandlingLoadFailure = false;
-      }
-    }
-  } catch (error) {
-    debugLog(`Failed to recover Jellyfin open URL after load failure: ${error.message}`);
+    const url = mpv.getString('stream-open-filename');
+    const normalized = normalizeJellyfinAuthUrl(url);
+    if (normalized !== url) mpv.set('stream-open-filename', normalized);
+  } finally {
+    next();
   }
-
-  next();
 });
 
 event.on('iina.file-loaded', onFileLoaded);
 
-// Playback tracking events for Jellyfin progress sync
-event.on('mpv.time-pos.changed', handlePlaybackPositionChange);
+// Position is sampled by the playback tracking tick. IINA does not observe
+// mpv's time-pos property, so there is no mpv.time-pos.changed event to
+// subscribe to — it drives its own time display from a periodic timer.
 
 // Pause/unpause state sync
 event.on('mpv.pause.changed', handlePauseChange);
@@ -937,6 +652,7 @@ event.on('mpv.pause.changed', handlePauseChange);
 // Handle file ending (includes both natural end and replacement)
 event.on('mpv.end-file', () => {
   const queuedForAutoplay = isQueued();
+  const isReplacingPlayback = consumeReplacementGuard();
   debugLog(
     'mpv.end-file triggered, isReplacingPlayback=' +
       isReplacingPlayback +
@@ -946,7 +662,6 @@ event.on('mpv.end-file', () => {
   if (isReplacingPlayback) {
     // File is being replaced (e.g. episode transition) — don't send stop report
     debugLog('File replacement in progress, skipping stop report');
-    isReplacingPlayback = false;
     return;
   }
   if (queuedForAutoplay) {
@@ -959,14 +674,9 @@ event.on('mpv.end-file', () => {
   stopPlaybackTracking();
 });
 
-// Handle EOF reached — mark as watched if near end
-event.on('mpv.eof-reached', () => {
-  debugLog('End of file reached (eof-reached)');
-  const playbackSession = getCurrentPlaybackSession();
-  if (playbackSession && playbackSession.itemId) {
-    markAsWatched(playbackSession.serverBase, playbackSession.itemId, playbackSession.apiKey);
-  }
-});
+// Reaching the end marks the item watched from the playback tracking tick.
+// eof-reached is an mpv property, not an event, so there is no
+// mpv.eof-reached event to listen for.
 
 // Stop tracking when window closes
 event.on('iina.window-will-close', () => {
@@ -986,6 +696,13 @@ event.on('iina.window-loaded', () => {
 
   // Set up message handler for sidebar playback requests
   sidebar.onMessage('play-media', handlePlayMedia);
+  sidebar.onMessage('play-media-list', handlePlayMediaList);
+
+  // The webview cannot read preferences, so it asks for the shared Jellyfin
+  // client identity (device id + version) it must authenticate with.
+  sidebar.onMessage('get-client-identity', () => {
+    sidebar.postMessage('client-identity', getClientIdentity());
+  });
 
   // Handle session requests from sidebar (backward compatible)
   sidebar.onMessage('get-session', () => {
@@ -1064,14 +781,9 @@ event.on('iina.window-loaded', () => {
     }
   });
 
-  // Also expose a global method for sidebar communication
-  global.playMedia = (streamUrl, title) => {
-    debugLog('Global playMedia called with:', streamUrl, title);
-    handlePlayMedia({ streamUrl, title });
-  };
-
   // Send initial server data to sidebar after a brief delay
   setTimeout(() => {
+    sidebar.postMessage('client-identity', getClientIdentity());
     const servers = loadStoredServers();
     const activeServerId = getActiveServerId();
     if (servers.length > 0) {

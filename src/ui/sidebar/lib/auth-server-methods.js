@@ -1,5 +1,45 @@
 window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(debugLog) {
   return {
+    handleClientIdentity(identity) {
+      if (!identity || !identity.deviceId) {
+        debugLog('Ignoring client identity without a device id');
+        return;
+      }
+      this.clientIdentity = identity;
+      debugLog(`Client identity set: device ${identity.deviceId}, version ${identity.version}`);
+    },
+
+    /**
+     * Build the MediaBrowser Authorization header. The device id comes from the
+     * plugin (persisted in preferences) so the webview authenticates as the
+     * same Jellyfin device as the rest of the plugin. Jellyfin keys sessions
+     * and tokens by DeviceId, so a value shared across installs would make
+     * different users collide on the same server.
+     */
+    buildAuthorizationHeader(token) {
+      const identity = this.clientIdentity || {};
+
+      if (!identity.deviceId && !this.fallbackDeviceId) {
+        // Identity message hasn't arrived — use a unique id for this webview
+        // rather than a constant shared by every install.
+        this.fallbackDeviceId = `iina-jellyfin-webview-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+        debugLog('No client identity yet, using generated device id');
+      }
+
+      const parts = [
+        `Client="${identity.clientName || 'IINA Jellyfin Plugin'}"`,
+        `Device="${identity.deviceName || 'IINA'}"`,
+        `DeviceId="${identity.deviceId || this.fallbackDeviceId}"`,
+        `Version="${identity.version || '0.0.0'}"`,
+      ];
+
+      if (token) {
+        parts.push(`Token="${token}"`);
+      }
+
+      return `MediaBrowser ${parts.join(', ')}`;
+    },
+
     handleServersList(data) {
       if (!data) return;
       this.servers = data.servers || [];
@@ -7,20 +47,24 @@ window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(
       this.renderServerList();
 
       if (!this.initialAutoConnectDone && !this.currentServer) {
-        const validServers = this.servers.filter((server) => server.userId);
+        // A userId is not required: a session captured from a played URL only
+        // gains one once connectToServer has read /Users/Me.
+        const validServers = this.servers.filter((server) => server.accessToken);
         if (validServers.length > 0) {
           const activeServer =
             validServers.find((server) => server.id === this.activeServerId) || validServers[0];
           this.connectToServer(activeServer);
+          // Only an attempted connection counts as done. An empty list simply
+          // means the plugin has not sent the servers yet.
+          this.initialAutoConnectDone = true;
         }
-        this.initialAutoConnectDone = true;
       }
     },
 
     renderServerList() {
       const listEl = document.getElementById('savedServerList');
 
-      const validServers = this.servers.filter((server) => server.userId);
+      const validServers = this.servers.filter((server) => server.accessToken);
 
       if (validServers.length === 0) {
         listEl.style.display = 'none';
@@ -84,14 +128,14 @@ window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(
 
         const response = await this.getHttpClient().get(`${serverData.serverUrl}/System/Info`, {
           headers: {
-            'X-Emby-Token': serverData.accessToken,
+            Authorization: this.buildAuthorizationHeader(serverData.accessToken),
           },
         });
 
         if (response.status === 200 && response.data) {
           const userResponse = await this.getHttpClient().get(`${serverData.serverUrl}/Users/Me`, {
             headers: {
-              'X-Emby-Token': serverData.accessToken,
+              Authorization: this.buildAuthorizationHeader(serverData.accessToken),
             },
           });
 
@@ -101,7 +145,9 @@ window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(
               url: serverData.serverUrl,
               userId: userResponse.data.Id,
               accessToken: serverData.accessToken,
-              serverId: serverData.id,
+              // Stored server entries carry "id"; session payloads sent to the
+              // webview carry "serverId". Both reach this function.
+              serverId: serverData.id || serverData.serverId,
             };
 
             this.currentUser = userResponse.data;
@@ -165,10 +211,18 @@ window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(
       this.renderServerList();
     },
 
+    /**
+     * Escape a server-provided value for interpolation into innerHTML.
+     * Quotes are escaped too so the result is also safe inside an attribute.
+     */
     escapeHtml(str) {
-      const div = document.createElement('div');
-      div.textContent = str || '';
-      return div.innerHTML;
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     },
 
     handleSessionAvailable(sessionData) {
@@ -221,6 +275,31 @@ window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(
       }
     },
 
+    /**
+     * "Disconnect" in the UI: drop the connected server's stored credentials,
+     * then reset the view. Without this the access token stays in preferences
+     * and the next window silently auto-connects again.
+     */
+    logoutActiveServer() {
+      const serverId = this.currentServer?.serverId || this.activeServerId;
+
+      if (typeof iina !== 'undefined' && iina.postMessage) {
+        if (serverId) {
+          debugLog(`Removing stored credentials for server: ${serverId}`);
+          iina.postMessage('remove-server', { serverId });
+          this.servers = this.servers.filter((server) => server.id !== serverId);
+        } else {
+          // No id to target (e.g. legacy session) — clear the stored session so
+          // the token is not left behind.
+          debugLog('No server id for the active connection, clearing stored session');
+          iina.postMessage('clear-session');
+          this.servers = [];
+        }
+      }
+
+      this.disconnectFromServer();
+    },
+
     disconnectFromServer() {
       debugLog('Disconnecting from current server');
       this.currentUser = null;
@@ -231,17 +310,6 @@ window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(
       this.hideMainContent();
       this.showConnectButton();
       this.renderServerList();
-      this.clearLoginForm();
-    },
-
-    logout() {
-      debugLog('Logging out user');
-      this.currentUser = null;
-      this.currentServer = null;
-      this.updateServerStatus('Not connected');
-      this.clearAllMediaContent();
-      this.hideMainContent();
-      this.showConnectButton();
       this.clearLoginForm();
     },
 
@@ -352,8 +420,7 @@ window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(
         const initiateResponse = await httpClient.post(`${normalizedUrl}/QuickConnect/Initiate`, {
           headers: {
             'Content-Type': 'application/json',
-            Authorization:
-              'MediaBrowser Client="IINA Jellyfin Plugin by alego500", Device="IINA", DeviceId="IINA-Jellyfin-Plugin", Version="0.6.1"',
+            Authorization: this.buildAuthorizationHeader(),
           },
         });
 
@@ -435,6 +502,15 @@ window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(
     },
 
     async authenticateWithQuickConnect() {
+      // The poll that triggers this may already have been cancelled, which
+      // clears both values — without this the request would go to "null/Users/
+      // AuthenticateWithQuickConnect" and report a login failure the user
+      // never attempted.
+      if (!this.qcServerUrl || !this.qcSecret) {
+        debugLog('Quick Connect was cancelled before authentication, ignoring');
+        return;
+      }
+
       try {
         const httpClient = this.getHttpClient();
         const response = await httpClient.post(
@@ -442,8 +518,7 @@ window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(
           {
             headers: {
               'Content-Type': 'application/json',
-              Authorization:
-                'MediaBrowser Client="IINA Jellyfin Plugin by alego500", Device="IINA", DeviceId="IINA-Jellyfin-Plugin", Version="0.6.1"',
+              Authorization: this.buildAuthorizationHeader(),
             },
             data: JSON.stringify({ Secret: this.qcSecret }),
           }
@@ -539,7 +614,13 @@ window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(
         return;
       }
 
-      const normalizedUrl = this.normalizeServerUrl(serverUrl);
+      let normalizedUrl;
+      try {
+        normalizedUrl = this.normalizeServerUrl(serverUrl);
+      } catch (error) {
+        errorEl.textContent = error.message || 'Invalid server URL';
+        return;
+      }
       debugLog('Normalized URL: ' + normalizedUrl);
 
       try {
@@ -663,8 +744,7 @@ window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(
           headers: {
             'Content-Type': 'application/json',
             Accept: 'application/json',
-            Authorization:
-              'MediaBrowser Client="IINA Jellyfin Plugin by alego500", Device="IINA", DeviceId="IINA-Jellyfin-Plugin", Version="0.6.1"',
+            Authorization: this.buildAuthorizationHeader(),
           },
           data: JSON.stringify(authData),
         });

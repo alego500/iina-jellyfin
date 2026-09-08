@@ -12,10 +12,36 @@ function createPlaybackTrackingManager({
   log,
 }) {
   let currentPlaybackSession = null;
+  // Bumped by every start and stop so an in-flight startPlaybackTracking can
+  // tell that its session is no longer the one being played.
+  let sessionRequestCounter = 0;
   let lastReportedPosition = 0;
   let lastKnownPosition = 0;
+  // A position of 0 means two different things: the file has not started yet
+  // (including the moment before the resume seek runs), or the user rewound to
+  // the beginning. Only after a position above 0 has been seen is 0 a real
+  // playback position worth reporting.
+  let hasStartedPlayback = false;
   let playbackTickCount = 0;
   let playbackTickTimer = null;
+
+  /**
+   * Current playback position, or null when it carries no information yet.
+   */
+  function samplePosition() {
+    const position = core.status.position;
+
+    if (position === null || position === undefined || position < 0) {
+      return null;
+    }
+
+    if (position > 0) {
+      hasStartedPlayback = true;
+      return position;
+    }
+
+    return hasStartedPlayback ? 0 : null;
+  }
 
   const PLAYBACK_TICK_INTERVAL = 1000;
   const PROGRESS_REPORT_TICKS = 10;
@@ -59,16 +85,37 @@ function createPlaybackTrackingManager({
   }
 
   async function resumeFromJellyfin(serverBase, itemId, apiKey) {
+    // The session this resume belongs to. The user can load another file while
+    // the metadata request or the 1s delay is still pending — seeking then
+    // would jump the *new* file to this item's resume position.
+    const session = currentPlaybackSession;
+
     try {
       const resumePosition = await fetchResumePosition(serverBase, itemId, apiKey);
+
+      // Keep what the server had, so stopping without playing anything can
+      // report it back unchanged instead of resetting the item.
+      if (session) {
+        session.resumePosition = resumePosition ?? 0;
+      }
 
       if (resumePosition === null || resumePosition < 15) {
         log('No significant resume position, starting from beginning');
         return;
       }
 
+      if (currentPlaybackSession !== session) {
+        log(`Playback session changed while fetching resume position for ${itemId}, not seeking`);
+        return;
+      }
+
       setTimeout(() => {
         try {
+          if (currentPlaybackSession !== session) {
+            log(`Playback session changed before resume seek for ${itemId}, not seeking`);
+            return;
+          }
+
           log(`Resuming playback at ${resumePosition.toFixed(1)}s`);
           core.seekTo(resumePosition);
 
@@ -93,7 +140,7 @@ function createPlaybackTrackingManager({
         return false;
       }
 
-      const url = `${serverBase}/Sessions/Playing?api_key=${apiKey}`;
+      const url = `${serverBase}/Sessions/Playing?ApiKey=${encodeURIComponent(apiKey)}`;
       log(`Reporting playback start for item: ${itemId}`);
 
       const response = await http.post(url, {
@@ -141,7 +188,7 @@ function createPlaybackTrackingManager({
       }
 
       const positionTicks = secondsToTicks(positionSeconds);
-      const url = `${serverBase}/Sessions/Playing/Progress?api_key=${apiKey}`;
+      const url = `${serverBase}/Sessions/Playing/Progress?ApiKey=${encodeURIComponent(apiKey)}`;
 
       const response = await http.post(url, {
         headers: buildJellyfinHeaders(apiKey, {
@@ -188,7 +235,7 @@ function createPlaybackTrackingManager({
       }
 
       const positionTicks = secondsToTicks(positionSeconds);
-      const url = `${serverBase}/Sessions/Playing/Stopped?api_key=${apiKey}`;
+      const url = `${serverBase}/Sessions/Playing/Stopped?ApiKey=${encodeURIComponent(apiKey)}`;
 
       log(`Reporting playback stop: position=${positionSeconds}s (${positionTicks} ticks)`);
 
@@ -227,7 +274,7 @@ function createPlaybackTrackingManager({
         return false;
       }
 
-      const url = `${serverBase}/UserPlayedItems/${itemId}?api_key=${apiKey}`;
+      const url = `${serverBase}/UserPlayedItems/${itemId}?ApiKey=${encodeURIComponent(apiKey)}`;
       log(`Marking item as watched: ${itemId}`);
 
       const response = await http.post(url, {
@@ -270,6 +317,8 @@ function createPlaybackTrackingManager({
 
     log(`Starting playback tracking for item: ${itemId}`);
 
+    const requestId = ++sessionRequestCounter;
+
     let playSessionId = null;
     let mediaSourceId = null;
     try {
@@ -285,6 +334,14 @@ function createPlaybackTrackingManager({
       log(`Could not fetch playback info for session: ${error.message}`);
     }
 
+    if (requestId !== sessionRequestCounter) {
+      // Another file was loaded (or playback stopped) while the playback info
+      // request was in flight — installing this session now would report
+      // progress for the wrong item.
+      log(`Playback tracking for ${itemId} is stale, not starting`);
+      return;
+    }
+
     currentPlaybackSession = {
       serverBase,
       itemId,
@@ -292,6 +349,7 @@ function createPlaybackTrackingManager({
       playSessionId,
       mediaSourceId,
       startTime: Date.now(),
+      resumePosition: null,
       duration: null,
       hasReportedWatched: false,
     };
@@ -325,8 +383,8 @@ function createPlaybackTrackingManager({
       }
 
       try {
-        const position = core.status.position;
-        if (position !== null && position !== undefined && position > 0) {
+        const position = samplePosition();
+        if (position !== null) {
           lastKnownPosition = position;
         }
 
@@ -375,6 +433,17 @@ function createPlaybackTrackingManager({
           const remaining = duration - lastKnownPosition;
           if (remaining <= 0.5) {
             log('EOF detected via tick, stopping playback tracking');
+
+            // This runs before mpv reports eof-reached and clears the session,
+            // so the watched state has to be sent from here. The progress
+            // threshold above only runs every PROGRESS_REPORT_TICKS ticks and
+            // can be missed entirely on short files or after a seek to the end.
+            if (!currentPlaybackSession.hasReportedWatched) {
+              const finished = currentPlaybackSession;
+              finished.hasReportedWatched = true;
+              markAsWatched(finished.serverBase, finished.itemId, finished.apiKey);
+            }
+
             stopPlaybackTracking();
           }
         }
@@ -392,25 +461,12 @@ function createPlaybackTrackingManager({
     playbackTickCount = 0;
   }
 
-  function handlePlaybackPositionChange() {
-    if (!currentPlaybackSession) return;
-
-    try {
-      const position = core.status.position;
-      if (position !== null && position !== undefined && position > 0) {
-        lastKnownPosition = position;
-      }
-    } catch (error) {
-      log(`Error in position change handler: ${error.message}`);
-    }
-  }
-
   function handlePauseChange() {
     if (!currentPlaybackSession) return;
 
     try {
-      const position = core.status.position;
-      if (position !== null && position !== undefined && position > 0) {
+      const position = samplePosition();
+      if (position !== null) {
         lastKnownPosition = position;
       }
 
@@ -436,6 +492,10 @@ function createPlaybackTrackingManager({
   }
 
   function stopPlaybackTracking() {
+    // Invalidate any start that is still waiting on its playback info request,
+    // even when there is no session to stop yet.
+    sessionRequestCounter++;
+
     if (currentPlaybackSession) {
       stopPlaybackTick();
 
@@ -443,16 +503,20 @@ function createPlaybackTrackingManager({
 
       let finalPosition = lastKnownPosition;
       try {
-        const position = core.status.position;
-        if (position !== null && position !== undefined && position > 0) {
+        const position = samplePosition();
+        if (position !== null) {
           finalPosition = position;
         }
       } catch {
         log(`Could not get final position from core, using lastKnownPosition: ${finalPosition}`);
       }
 
-      if (finalPosition <= 0) {
-        finalPosition = lastReportedPosition;
+      if (!hasStartedPlayback) {
+        // Nothing ever played, so report what the item already had. Sending 0
+        // here would drop it out of Continue Watching just for being opened.
+        const preserved = currentPlaybackSession.resumePosition ?? lastReportedPosition;
+        log(`No playback observed, reporting the stored position (${preserved}s)`);
+        finalPosition = preserved;
       }
 
       reportPlaybackStop(serverBase, itemId, apiKey, finalPosition, playSessionId, mediaSourceId);
@@ -460,6 +524,7 @@ function createPlaybackTrackingManager({
       currentPlaybackSession = null;
       lastReportedPosition = 0;
       lastKnownPosition = 0;
+      hasStartedPlayback = false;
       log('Playback session ended');
     }
   }
@@ -471,7 +536,6 @@ function createPlaybackTrackingManager({
   return {
     startPlaybackTracking,
     stopPlaybackTracking,
-    handlePlaybackPositionChange,
     handlePauseChange,
     markAsWatched,
     getCurrentPlaybackSession,

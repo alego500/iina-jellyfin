@@ -1,7 +1,7 @@
 {
   "name": "Jellyfin by alego500",
   "identifier": "com.alego500.iina-jellyfin",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Jellyfin plugin for IINA, enabling seamless media playback and subtitle management.",
   "author": {
     "name": "alego500",
@@ -34,5 +34,5 @@
     "use_connected_account": false
   },
   "ghRepo": "alego500/iina-jellyfin",
-  "ghVersion": 11
+  "ghVersion": 12
 }

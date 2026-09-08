@@ -2,7 +2,7 @@
 
 const CLIENT_NAME = 'IINA Jellyfin Plugin by alego500';
 const DEVICE_NAME = 'IINA';
-const CLIENT_VERSION = '0.7.1'; // x-release-please-version
+const CLIENT_VERSION = '0.7.2'; // x-release-please-version
 
 function createJellyfinApi({ http, preferences, log }) {
   function getDeviceId() {
@@ -30,6 +30,21 @@ function createJellyfinApi({ http, preferences, log }) {
     return `MediaBrowser ${parts.join(', ')}`;
   }
 
+  /**
+   * The client identity used in the Authorization header. Exposed so the
+   * sidebar/standalone webviews authenticate as the same Jellyfin device as the
+   * plugin itself — Jellyfin keys sessions and tokens by DeviceId, so a
+   * hardcoded one would collide between installs.
+   */
+  function getClientIdentity() {
+    return {
+      clientName: CLIENT_NAME,
+      deviceName: DEVICE_NAME,
+      deviceId: getDeviceId(),
+      version: CLIENT_VERSION,
+    };
+  }
+
   function buildJellyfinHeaders(apiKey, extraHeaders) {
     return {
       Authorization: buildAuthorizationHeader(apiKey),
@@ -54,22 +69,28 @@ function createJellyfinApi({ http, preferences, log }) {
 
       const protocol = protocolMatch[1];
       const host = protocolMatch[2];
-      const serverBase = `${protocol}://${host}`;
-
-      log(`Extracted serverBase: ${serverBase}`);
 
       const urlParts = url.split('?');
-      const pathname = urlParts[0].replace(/^https?:\/\/[^/]+/, '');
       const queryString = urlParts[1] || '';
 
-      log(`Extracted pathname: ${pathname}`);
-      log(`Extracted queryString: ${queryString}`);
+      // Everything before the media route is the server, not just the host: a
+      // Jellyfin behind a reverse proxy subpath (https://example.com/jellyfin)
+      // would otherwise have every later API call sent to the bare domain.
+      const baseMatch = urlParts[0].match(/^(https?:\/\/[^/]+.*?)\/(?:Items|Videos|Audio)\//i);
+      const serverBase = baseMatch ? baseMatch[1] : `${protocol}://${host}`;
+      const pathname = urlParts[0].slice(serverBase.length);
 
-      const pathMatch = pathname.match(/\/Items\/([^/]+)/);
+      log(`Extracted serverBase: ${serverBase}`);
+      log(`Extracted pathname: ${pathname}`);
+
+      // Playback uses the streaming routes (/Videos/{id}/stream,
+      // /Audio/{id}/stream); /Items/{id}/... is still accepted so links made by
+      // earlier versions, and Jellyfin download links, keep working.
+      const pathMatch = pathname.match(/\/(?:Items|Videos|Audio)\/([^/]+)/);
       log(`Path match result: ${pathMatch ? pathMatch[0] : 'no match'}`);
 
       if (!pathMatch) {
-        log(`No /Items/ pattern found in pathname: ${pathname}`);
+        log(`No item id found in pathname: ${pathname}`);
         return null;
       }
 
@@ -77,7 +98,11 @@ function createJellyfinApi({ http, preferences, log }) {
 
       let apiKey = null;
       if (queryString) {
-        const apiKeyMatch = queryString.match(/(?:^|&)api_key=([^&]+)/);
+        // Jellyfin binds query parameters case-insensitively, so links made by
+        // other tools may spell the token differently.
+        const apiKeyMatch = queryString.match(
+          /(?:^|&)(?:api_key|apikey|api-key|x-emby-token)=([^&]+)/i
+        );
         if (apiKeyMatch) {
           apiKey = decodeURIComponent(apiKeyMatch[1]);
         }
@@ -105,18 +130,24 @@ function createJellyfinApi({ http, preferences, log }) {
   }
 
   function isJellyfinUrl(url) {
+    // Only remote URLs can be Jellyfin. Without this a local file such as
+    // /Users/me/Videos/movie.mp4 matches on "/Videos/" and every playback
+    // triggers metadata lookups that cannot succeed.
+    if (!url || !/^https?:\/\//i.test(url)) {
+      return false;
+    }
+
     return (
-      url &&
-      ((url.includes('/Items/') && url.includes('api_key=')) ||
-        url.includes('jellyfin') ||
-        url.includes('/Audio/') ||
-        url.includes('/Videos/'))
+      (url.includes('/Items/') && /[?&](?:api_key|apikey|api-key|x-emby-token)=/i.test(url)) ||
+      url.includes('jellyfin') ||
+      url.includes('/Audio/') ||
+      url.includes('/Videos/')
     );
   }
 
   async function fetchPlaybackInfo(serverBase, itemId, apiKey) {
     try {
-      const playbackUrl = `${serverBase}/Items/${itemId}/PlaybackInfo?api_key=${apiKey}`;
+      const playbackUrl = `${serverBase}/Items/${itemId}/PlaybackInfo?ApiKey=${encodeURIComponent(apiKey)}`;
       log(`Fetching playback info from: ${playbackUrl}`);
 
       const response = await http.get(playbackUrl, {
@@ -150,7 +181,7 @@ function createJellyfinApi({ http, preferences, log }) {
 
   async function fetchItemMetadata(serverBase, itemId, apiKey) {
     try {
-      const metadataUrl = `${serverBase}/Items/${itemId}?api_key=${apiKey}`;
+      const metadataUrl = `${serverBase}/Items/${itemId}?ApiKey=${encodeURIComponent(apiKey)}`;
       log(`Fetching item metadata from: ${metadataUrl}`);
 
       const response = await http.get(metadataUrl, {
@@ -190,6 +221,7 @@ function createJellyfinApi({ http, preferences, log }) {
   }
 
   return {
+    getClientIdentity,
     buildJellyfinHeaders,
     parseJellyfinUrl,
     isJellyfinUrl,

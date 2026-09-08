@@ -9,6 +9,17 @@
  */
 const MAX_DEBUG_LOG_LENGTH = 600;
 
+// Credentials travel in URLs (api_key=...) and in the MediaBrowser
+// Authorization header (Token="..."). Strip them from anything we log.
+const SECRET_QUERY_PARAM = /([?&](?:api_key|apikey|api-key|x-emby-token)=)[^&\s"']+/gi;
+const SECRET_TOKEN_FIELD = /((?:token|accesstoken|api_key)"?\s*[:=]\s*"?)[A-Za-z0-9._-]{8,}/gi;
+
+function redactSecrets(value) {
+  return String(value)
+    .replace(SECRET_QUERY_PARAM, '$1[redacted]')
+    .replace(SECRET_TOKEN_FIELD, '$1[redacted]');
+}
+
 function truncateDebugText(value, maxLength = MAX_DEBUG_LOG_LENGTH) {
   if (value.length <= maxLength) {
     return value;
@@ -73,7 +84,7 @@ function serializeDebugArg(arg) {
 
 function debugLog(...parts) {
   if (iina?.preferences?.get?.('debug_logging')) {
-    console.log(`DEBUG: ${parts.map(serializeDebugArg).join(' | ')}`);
+    console.log(`DEBUG: ${redactSecrets(parts.map(serializeDebugArg).join(' | '))}`);
   }
 }
 
@@ -95,6 +106,10 @@ class JellyfinSidebar {
     this.playlistItems = [];
     this.searchTimeout = null;
     this.pendingSessionData = null;
+
+    // Jellyfin client identity (device id + version), pushed by the plugin
+    this.clientIdentity = null;
+    this.fallbackDeviceId = null;
 
     // Multi-server state
     this.servers = []; // Array of stored server objects
@@ -179,7 +194,7 @@ class JellyfinSidebar {
     });
 
     document.getElementById('logoutBtn').addEventListener('click', () => {
-      this.disconnectFromServer();
+      this.logoutActiveServer();
     });
 
     // Login form
@@ -295,12 +310,19 @@ class JellyfinSidebar {
       this.hidePlaylistItems();
     });
 
-    // Enter key handling
-    document.getElementById('password').addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        this.login();
-      }
-    });
+    // Enter submits from any field of the form it belongs to
+    const submitOnEnter = (id, submit) => {
+      const field = document.getElementById(id);
+      if (!field) return;
+      field.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+          submit();
+        }
+      });
+    };
+
+    ['serverUrl', 'username', 'password'].forEach((id) => submitOnEnter(id, () => this.login()));
+    submitOnEnter('qcServerUrl', () => this.startQuickConnect());
   }
 
   setupTabNavigation() {
@@ -337,6 +359,11 @@ class JellyfinSidebar {
 
   setupMessageHandlers() {
     if (typeof iina !== 'undefined' && iina.onMessage) {
+      iina.onMessage('client-identity', (data) => {
+        debugLog('Received client-identity: ' + JSON.stringify(data));
+        this.handleClientIdentity(data);
+      });
+
       // Legacy session messages (backward compatible)
       iina.onMessage('session-available', (data) => {
         debugLog('Received session-available message: ' + JSON.stringify(data));
@@ -379,6 +406,8 @@ class JellyfinSidebar {
   requestSessionData() {
     debugLog('Requesting server data from main plugin');
     if (typeof iina !== 'undefined' && iina.postMessage) {
+      // Client identity is needed before any authentication request
+      iina.postMessage('get-client-identity');
       // Request multi-server list first
       iina.postMessage('get-servers');
       // Also request legacy session for backward compatibility
@@ -392,20 +421,24 @@ class JellyfinSidebar {
 Object.assign(JellyfinSidebar.prototype, window.createSidebarAuthServerMethods(debugLog));
 Object.assign(JellyfinSidebar.prototype, window.createSidebarMediaMethods(debugLog));
 
-// Initialize sidebar when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-  debugLog('DOM loaded, initializing Jellyfin sidebar');
-  window.jellyfinSidebar = new JellyfinSidebar();
-  debugLog('Jellyfin sidebar initialized');
-});
-
 // Expose for main plugin communication
 window.JellyfinSidebar = JellyfinSidebar;
 
-// Also try to initialize immediately if DOM is already loaded
+// Constructing twice would attach a second set of DOM listeners, so make
+// initialization idempotent rather than relying on which branch runs.
+function initJellyfinSidebar() {
+  if (window.jellyfinSidebar) {
+    debugLog('Jellyfin sidebar already initialized');
+    return;
+  }
+  window.jellyfinSidebar = new JellyfinSidebar();
+  debugLog('Jellyfin sidebar initialized');
+}
+
 if (document.readyState === 'loading') {
   debugLog('DOM still loading, waiting for DOMContentLoaded');
+  document.addEventListener('DOMContentLoaded', initJellyfinSidebar);
 } else {
   debugLog('DOM already loaded, initializing immediately');
-  window.jellyfinSidebar = new JellyfinSidebar();
+  initJellyfinSidebar();
 }

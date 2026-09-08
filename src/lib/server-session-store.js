@@ -1,6 +1,19 @@
 'use strict';
 
-function createServerSessionStore({ preferences, sidebar, log }) {
+function createServerSessionStore({ preferences, sidebar, standaloneWindow, log }) {
+  /**
+   * Both browser surfaces show the same server list, and either can be the one
+   * the user is acting in, so state changes go to both. Posting to a webview
+   * that was never created is a no-op inside IINA.
+   */
+  function notifyViews(name, data) {
+    for (const view of [sidebar, standaloneWindow]) {
+      if (view && typeof view.postMessage === 'function') {
+        view.postMessage(name, data);
+      }
+    }
+  }
+
   function loadStoredServers() {
     try {
       const serversJson = preferences.get('jellyfin_servers');
@@ -8,9 +21,28 @@ function createServerSessionStore({ preferences, sidebar, log }) {
       const servers = typeof serversJson === 'string' ? JSON.parse(serversJson) : serversJson;
       if (!Array.isArray(servers)) return [];
 
-      const validServers = servers.filter((server) => server.userId);
+      // A server is usable as long as it has somewhere to connect and a token.
+      // Sessions taken from a played URL have no userId until the sidebar
+      // connects and reads /Users/Me, so requiring one here deleted them on the
+      // very next read and auto-login from URLs never survived.
+      const usableServers = servers.filter(
+        (server) => server && server.serverUrl && server.accessToken
+      );
+
+      // Drop an unverified URL session for a server that is also signed in:
+      // the account entry supersedes it, and keeping both shows the server
+      // twice in the list.
+      const signedInUrls = new Set(
+        usableServers
+          .filter((server) => server.userId)
+          .map((server) => server.serverUrl.replace(/\/$/, ''))
+      );
+      const validServers = usableServers.filter(
+        (server) => server.userId || !signedInUrls.has(server.serverUrl.replace(/\/$/, ''))
+      );
+
       if (validServers.length !== servers.length) {
-        log(`Cleaned ${servers.length - validServers.length} ghost server entries without userId`);
+        log(`Cleaned ${servers.length - validServers.length} redundant server entries`);
         saveStoredServers(validServers);
       }
       return validServers;
@@ -44,12 +76,21 @@ function createServerSessionStore({ preferences, sidebar, log }) {
       const servers = loadStoredServers();
       const normalizedUrl = serverData.serverUrl.replace(/\/$/, '');
 
-      const existingIndex = servers.findIndex(
-        (server) =>
-          server.serverUrl.replace(/\/$/, '') === normalizedUrl &&
-          ((serverData.userId && server.userId === serverData.userId) ||
-            (!serverData.userId && !server.userId))
-      );
+      const isSameUrl = (server) => server.serverUrl.replace(/\/$/, '') === normalizedUrl;
+
+      // Match the same user on the same server. Failing that, a known user
+      // takes over the entry left by a URL session on that server (it is the
+      // same credential being identified), rather than adding a duplicate.
+      // A URL session never claims an entry that already belongs to a user.
+      let existingIndex = -1;
+      if (serverData.userId) {
+        existingIndex = servers.findIndex(
+          (server) => isSameUrl(server) && server.userId === serverData.userId
+        );
+      }
+      if (existingIndex < 0) {
+        existingIndex = servers.findIndex((server) => isSameUrl(server) && !server.userId);
+      }
 
       const serverEntry = {
         id: existingIndex >= 0 ? servers[existingIndex].id : `srv-${Date.now()}`,
@@ -95,9 +136,7 @@ function createServerSessionStore({ preferences, sidebar, log }) {
 
       log(`Removed server: ${serverId}`);
 
-      if (sidebar && sidebar.postMessage) {
-        sidebar.postMessage('servers-updated', { servers, activeServerId: getActiveServerId() });
-      }
+      notifyViews('servers-updated', { servers, activeServerId: getActiveServerId() });
     } catch (error) {
       log(`Error removing server: ${error.message}`);
     }
@@ -124,48 +163,33 @@ function createServerSessionStore({ preferences, sidebar, log }) {
       setActiveServerId(serverId);
       log(`Switched active server to: ${server.serverName}`);
 
-      if (sidebar && sidebar.postMessage) {
-        sidebar.postMessage('server-switched', {
-          server,
-          servers,
-          activeServerId: serverId,
-        });
-      }
+      notifyViews('server-switched', { server, servers, activeServerId: serverId });
     }
   }
 
   function storeJellyfinSession(serverBase, apiKey) {
     try {
-      log(`Storing Jellyfin session data for: ${serverBase}`);
-
       const normalizedUrl = String(serverBase || '').replace(/\/$/, '');
-      const servers = loadStoredServers();
-      const matchingServer = servers.find(
-        (server) => server.serverUrl.replace(/\/$/, '') === normalizedUrl
+
+      // If this server is already signed in, its account credentials are the
+      // better ones and storing the URL's api_key next to them would leave two
+      // entries for the same server in the list.
+      const signedIn = loadStoredServers().find(
+        (server) => server.userId && server.serverUrl.replace(/\/$/, '') === normalizedUrl
       );
-
-      if (matchingServer) {
-        if (matchingServer.accessToken !== apiKey) {
-          addOrUpdateServer({
-            serverUrl: matchingServer.serverUrl,
-            accessToken: apiKey,
-            serverName: matchingServer.serverName,
-            userId: matchingServer.userId,
-            username: matchingServer.username,
-          });
-        } else {
-          log(`Reusing existing Jellyfin session for: ${matchingServer.serverName}`);
-        }
-
-        if (sidebar && sidebar.postMessage) {
-          sidebar.postMessage('session-available', {
-            serverUrl: matchingServer.serverUrl,
-            accessToken: apiKey,
-            serverId: matchingServer.id,
-          });
-        }
+      if (signedIn) {
+        log(
+          `Server ${normalizedUrl} is already signed in as ${signedIn.username || signedIn.userId}`
+        );
+        notifyViews('session-available', {
+          serverUrl: signedIn.serverUrl,
+          accessToken: signedIn.accessToken,
+          serverId: signedIn.id,
+        });
         return;
       }
+
+      log(`Storing Jellyfin session data for: ${serverBase}`);
 
       const server = addOrUpdateServer({
         serverUrl: serverBase,
@@ -173,13 +197,11 @@ function createServerSessionStore({ preferences, sidebar, log }) {
       });
 
       if (server) {
-        if (sidebar && sidebar.postMessage) {
-          sidebar.postMessage('session-available', {
-            serverUrl: server.serverUrl,
-            accessToken: server.accessToken,
-            serverId: server.id,
-          });
-        }
+        notifyViews('session-available', {
+          serverUrl: server.serverUrl,
+          accessToken: server.accessToken,
+          serverId: server.id,
+        });
       }
     } catch (error) {
       log(`Error storing Jellyfin session: ${error.message}`);
@@ -192,9 +214,7 @@ function createServerSessionStore({ preferences, sidebar, log }) {
       saveStoredServers([]);
       setActiveServerId(null);
 
-      if (sidebar && sidebar.postMessage) {
-        sidebar.postMessage('session-cleared', {});
-      }
+      notifyViews('session-cleared', {});
     } catch (error) {
       log(`Error clearing Jellyfin session: ${error.message}`);
     }

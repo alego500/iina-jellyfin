@@ -22,9 +22,7 @@ An comprehensive IINA plugin that provides Jellyfin media server integration, in
 - **Recent items browser**: Browse recently added movies and TV shows
 - **Music library browser**: Browse your music library by albums, artists, or songs with album artwork
 - **Album track listing**: View and play individual tracks from any album
-- **Playlist browser**: Browse Jellyfin playlists in a dedicated sidebar tab
-- **Playlist item listing**: Open playlists to inspect contained movies, episodes, and audio tracks
-- **Playlist queue playback**: Use "Play All" to load playlist items into IINA's playlist queue
+- **Playlist browsing**: Browse and search Jellyfin playlists, inspect their ordered items, and play the complete list in one IINA window
 - **Search functionality**: Search your Jellyfin library for specific content
 - **Advanced filtering & sorting**: Sort by name, date added, release date, or rating; filter by watch status, favorites, and genre
 - **Series episode selection**: Browse seasons and episodes for TV shows
@@ -128,14 +126,11 @@ Search also supports music content — use the "Albums" and "Songs" filter chips
 
 ##### Playlists
 
-The Playlists tab lists Jellyfin playlists returned by the server for the current user.
-
-- Open a playlist to browse its items
-- Click an individual playlist item to play it immediately
-- Use **Play All** to load the playlist into IINA's playlist queue
-- Use **Open in Jellyfin** to jump to the playlist details page in the Jellyfin web UI
-
-Search also supports playlists via the "Playlists" filter chip.
+The **Playlists** tab shows playlists available to your connected account. Open one to inspect
+its items, play an individual item, or use **Play All** to queue the complete list in server order.
+Playlist search is also available through the **Playlists** search filter. **Open in Jellyfin**
+opens the selected playlist in your web browser. Album and playlist Play All controls appear
+above their item lists; multi-item playback uses the current window so the queue stays together.
 
 ##### Advanced Filtering & Sorting
 
@@ -167,6 +162,8 @@ Click the "Filter/Sort" button in the Movies or TV Series tab header to toggle t
 
 The plugin automatically detects and processes Jellyfin URLs in these formats:
 
+- Jellyfin web details links: `https://server/web/#/details?id={ItemId}` and `https://server/web/index.html#!/details?id={ItemId}`. Sign in to that exact server in the plugin first. Movie, episode, audio, and playlist links are resolved before playback; playlists retain their order and titles. Reverse proxy paths such as `/jellyfin/web/` are supported.
+- Current stream URLs: `http://server:port/Videos/{ItemId}/stream?static=true&ApiKey={key}` (or `/Audio/` for music).
 - Download URLs: `http://server:port/Items/{ItemId}/Download?api_key={key}` _(automatically stores credentials for sidebar login)_
 - URLs containing `/Items/` and `api_key=` _(automatically stores credentials for sidebar login)_
 - URLs containing "jellyfin", "/Audio/", or "/Videos/"
@@ -195,7 +192,6 @@ Access plugin settings through IINA → Preferences → Plugins → Jellyfin:
 - **Download all available subtitles**: Download all subtitle tracks, ignoring language preferences
 - **Set video title from Jellyfin metadata**: Replace filenames with proper movie/show titles
 - **Open media in new IINA window**: Play media from browser in separate windows
-- **Playlist queue behavior**: Multi-item album and playlist playback is loaded into the current IINA window so the queue is preserved
 - **Enable autoplay**: Automatically queue the next episode when the current episode finishes, supporting cross-season playback
 
 ### Menu Options
@@ -210,11 +206,11 @@ The plugin adds these menu items to IINA:
 
 ### Development Scripts
 
-- `npm run check`: Run ESLint and Prettier checks
-- `npm run lint`: Run ESLint
-- `npm run lint:fix`: Auto-fix ESLint issues
-- `npm run format`: Check Prettier formatting
-- `npm run format:fix`: Auto-fix Prettier formatting
+- `pnpm run check`: Run ESLint and Prettier checks
+- `pnpm run lint`: Run ESLint
+- `pnpm run lint:fix`: Auto-fix ESLint issues
+- `pnpm run format`: Check Prettier formatting
+- `pnpm run format:fix`: Auto-fix Prettier formatting
 - `/Applications/IINA.app/Contents/MacOS/iina-plugin link .`: Link plugin to IINA for testing
 - `/Applications/IINA.app/Contents/MacOS/iina-plugin unlink .`: Unlink plugin from IINA
 

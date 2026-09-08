@@ -15,33 +15,6 @@ function createMediaActionsManager({
   let lastJellyfinUrl = null;
   let lastItemId = null;
 
-  function buildVideoTitleFromMetadata(metadata) {
-    if (!metadata || !metadata.Name) {
-      return '';
-    }
-
-    let title = metadata.Name;
-
-    if (metadata.Type === 'Episode') {
-      const seriesName = metadata.SeriesName;
-      const seasonNumber = metadata.ParentIndexNumber;
-      const episodeNumber = metadata.IndexNumber;
-
-      if (seriesName) {
-        let episodeTitle = seriesName;
-        if (seasonNumber !== undefined && episodeNumber !== undefined) {
-          episodeTitle += ` S${seasonNumber.toString().padStart(2, '0')}E${episodeNumber.toString().padStart(2, '0')}`;
-        }
-        episodeTitle += ` - ${metadata.Name}`;
-        title = episodeTitle;
-      }
-    } else if (metadata.Type === 'Movie' && metadata.ProductionYear) {
-      title = `${metadata.Name} (${metadata.ProductionYear})`;
-    }
-
-    return title;
-  }
-
   async function setVideoTitleFromMetadata(serverBase, itemId, apiKey) {
     try {
       if (!preferences.get('set_video_title')) {
@@ -56,7 +29,24 @@ function createMediaActionsManager({
         return;
       }
 
-      const title = buildVideoTitleFromMetadata(metadata);
+      let title = metadata.Name;
+
+      if (metadata.Type === 'Episode') {
+        const seriesName = metadata.SeriesName;
+        const seasonNumber = metadata.ParentIndexNumber;
+        const episodeNumber = metadata.IndexNumber;
+
+        if (seriesName) {
+          let episodeTitle = seriesName;
+          if (seasonNumber !== undefined && episodeNumber !== undefined) {
+            episodeTitle += ` S${seasonNumber.toString().padStart(2, '0')}E${episodeNumber.toString().padStart(2, '0')}`;
+          }
+          episodeTitle += ` - ${metadata.Name}`;
+          title = episodeTitle;
+        }
+      } else if (metadata.Type === 'Movie' && metadata.ProductionYear) {
+        title = `${metadata.Name} (${metadata.ProductionYear})`;
+      }
 
       log(`Setting video title to: "${title}"`);
 
@@ -83,38 +73,20 @@ function createMediaActionsManager({
     }
   }
 
-  async function downloadSubtitle(serverBase, itemId, streamIndex, apiKey, language, codec) {
-    try {
-      const subtitleUrl = `${serverBase}/Videos/${itemId}/${streamIndex}/Subtitles.${codec}?api_key=${apiKey}`;
-      const sanitizedItemId = String(itemId).replace(/[^a-zA-Z0-9_-]/g, '_');
-      const sanitizedLanguage = String(language).replace(/[^a-zA-Z0-9_-]/g, '_');
-      const sanitizedCodec = String(codec).replace(/[^a-zA-Z0-9_-]/g, '_');
-      const fileName = `jellyfin_${sanitizedItemId}_${streamIndex}_${sanitizedLanguage}.${sanitizedCodec}`;
-      const localPath = `@tmp/${fileName}`;
-
-      log(`Downloading subtitle: ${subtitleUrl}`);
-
-      await http.download(subtitleUrl, localPath);
-
-      const resolvedPath = utils.resolvePath(localPath);
-      core.subtitle.loadTrack(resolvedPath);
-
-      log(`Subtitle loaded: ${resolvedPath}`);
-
-      if (preferences.get('show_notifications')) {
-        core.osd(`Loaded ${language} subtitle`);
-      }
-
-      return true;
-    } catch (error) {
-      log(`Error downloading subtitle: ${error.message}`);
-      return false;
-    }
+  function subtitleExtensionForCodec(codec) {
+    if (codec === 'subrip') return 'srt';
+    if (codec === 'webvtt' || codec === 'vtt') return 'vtt';
+    if (codec === 'ass') return 'ass';
+    if (codec === 'ssa') return 'ssa';
+    if (codec && codec.toLowerCase().includes('srt')) return 'srt';
+    if (codec && codec.toLowerCase().includes('vtt')) return 'vtt';
+    return 'srt';
   }
 
   async function downloadExternalSubtitle(
     serverBase,
     itemId,
+    mediaSourceId,
     streamIndex,
     subtitlePath,
     apiKey,
@@ -122,29 +94,25 @@ function createMediaActionsManager({
     codec
   ) {
     try {
-      let extension = 'srt';
-      if (codec === 'subrip') extension = 'srt';
-      else if (codec === 'webvtt') extension = 'vtt';
-      else if (codec === 'ass') extension = 'ass';
-      else if (codec === 'ssa') extension = 'ssa';
-      else if (codec === 'vtt') extension = 'vtt';
-      else if (codec && codec.toLowerCase().includes('srt')) extension = 'srt';
-      else if (codec && codec.toLowerCase().includes('vtt')) extension = 'vtt';
+      const extension = subtitleExtensionForCodec(codec);
 
-      const subtitleUrl = `${serverBase}/Videos/${itemId}/${itemId}/Subtitles/${streamIndex}/stream.${extension}?api_key=${apiKey}`;
+      const subtitleUrl = `${serverBase}/Videos/${itemId}/${mediaSourceId || itemId}/Subtitles/${streamIndex}/stream.${extension}?ApiKey=${encodeURIComponent(apiKey)}`;
 
-      let fileName;
+      // Everything lands in one @tmp directory, so the name has to identify the
+      // item and the track. Server-side names like "English.srt" repeat across
+      // the library and would otherwise overwrite each other.
+      const sanitizedItemId = String(itemId).replace(/[^a-zA-Z0-9_-]/g, '_');
+      let suffix;
       if (subtitlePath) {
         const pathParts = subtitlePath.split(/[/\\]/);
-        const originalName = pathParts[pathParts.length - 1];
-        fileName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
-        log(`Using sanitized filename: ${fileName}`);
+        suffix = pathParts[pathParts.length - 1].replace(/[^a-zA-Z0-9._-]/g, '_');
       } else {
-        const sanitizedItemId = String(itemId).replace(/[^a-zA-Z0-9_-]/g, '_');
         const sanitizedLanguage = String(language).replace(/[^a-zA-Z0-9_-]/g, '_');
-        fileName = `jellyfin_external_${sanitizedItemId}_${streamIndex}_${sanitizedLanguage}.${extension}`;
-        log(`Using generated filename: ${fileName}`);
+        suffix = `${sanitizedLanguage}.${extension}`;
       }
+
+      const fileName = `jellyfin_${sanitizedItemId}_${streamIndex}_${suffix}`;
+      log(`Using filename: ${fileName}`);
 
       const localPath = `@tmp/${fileName}`;
 
@@ -185,11 +153,17 @@ function createMediaActionsManager({
       const mediaSource = playbackInfo.MediaSources[0];
       const mediaStreams = mediaSource.MediaStreams || [];
 
+      // External sidecar files only. Embedded tracks would have to be extracted
+      // by the server on demand, which takes minutes for large remuxes, and
+      // mpv already exposes them from the file itself.
       const subtitleStreams = mediaStreams.filter(
-        (stream) => stream.Type === 'Subtitle' && stream.IsTextSubtitleStream
+        // IsExternal is what identifies a sidecar file. Path is only used to
+        // name the download and Jellyfin omits it for non-admin accounts, so
+        // requiring it here would hide every subtitle from those users.
+        (stream) => stream.Type === 'Subtitle' && stream.IsTextSubtitleStream && stream.IsExternal
       );
 
-      log(`Found ${subtitleStreams.length} subtitle streams`);
+      log(`Found ${subtitleStreams.length} external subtitle stream(s)`);
 
       const preferredLanguages = (preferences.get('preferred_languages') || 'en,eng')
         .split(',')
@@ -215,25 +189,22 @@ function createMediaActionsManager({
           continue;
         }
 
-        log(
-          `Processing subtitle: ${language} (${codec}) - Index: ${stream.Index}, External: ${stream.IsExternal}`
-        );
+        log(`Processing external subtitle: ${language} (${codec}) - Index: ${stream.Index}`);
 
         try {
-          if (stream.IsExternal && stream.Path) {
-            await downloadExternalSubtitle(
-              serverBase,
-              itemId,
-              stream.Index,
-              stream.Path,
-              apiKey,
-              language,
-              codec
-            );
-          } else {
-            await downloadSubtitle(serverBase, itemId, stream.Index, apiKey, language, codec);
+          const downloaded = await downloadExternalSubtitle(
+            serverBase,
+            itemId,
+            mediaSource.Id,
+            stream.Index,
+            stream.Path,
+            apiKey,
+            language,
+            codec
+          );
+          if (downloaded) {
+            downloadedCount++;
           }
-          downloadedCount++;
         } catch (error) {
           log(`Failed to download subtitle ${language}: ${error.message}`);
         }
@@ -242,9 +213,9 @@ function createMediaActionsManager({
       if (downloadedCount > 0 && preferences.get('show_notifications')) {
         core.osd(`Downloaded ${downloadedCount} subtitle(s)`);
       } else if (downloadedCount === 0) {
-        log('No subtitles downloaded');
+        log('No external subtitles downloaded');
         if (preferences.get('show_notifications')) {
-          core.osd('No matching subtitles found');
+          core.osd('No matching external subtitles found');
         }
       }
     } catch (error) {
@@ -272,11 +243,10 @@ function createMediaActionsManager({
 
     if (!currentUrl) {
       try {
-        log('No stored URL, checking core.status');
-        const currentFile = core.status.url || core.status.path;
-        log(`core.status.url = "${core.status.url}"`);
-        log(`core.status.path = "${core.status.path}"`);
-        log(`currentFile = "${currentFile}"`);
+        // core.status has no "path"; url is the only file location it exposes,
+        // and IINA returns it percent-decoded.
+        const currentFile = core.status.url;
+        log(`No stored URL, core.status.url = "${currentFile}"`);
 
         if (currentFile && isJellyfinUrl(currentFile)) {
           currentUrl = currentFile;

@@ -20,11 +20,11 @@ function createAutoplayManager({
 
       const queryParams = [
         'seasonId=' + encodeURIComponent(seasonId),
-        'fields=' + encodeURIComponent('MediaSources,Path,LocationType,IsFolder,CanDownload'),
+        'fields=' + encodeURIComponent('MediaSources,Path,LocationType,IsFolder'),
       ].join('&');
 
       const response = await http.get(
-        `${serverBase}/Shows/${seriesId}/Episodes?${queryParams}&api_key=${apiKey}`,
+        `${serverBase}/Shows/${seriesId}/Episodes?${queryParams}&ApiKey=${encodeURIComponent(apiKey)}`,
         {
           headers: buildJellyfinHeaders(apiKey, {
             Accept: 'application/json',
@@ -44,16 +44,15 @@ function createAutoplayManager({
         return [];
       }
 
-      const episodes = episodeData.Items.filter((episode) => {
-        const hasMediaSources = episode.MediaSources && episode.MediaSources.length > 0;
-        const canDownload = episode.CanDownload !== false;
-        return hasMediaSources && canDownload;
-      }).map((episode) => ({
+      // Playback streams the item, so download permission is irrelevant here
+      const episodes = episodeData.Items.filter(
+        (episode) => episode.MediaSources && episode.MediaSources.length > 0
+      ).map((episode) => ({
         id: episode.Id,
         name: episode.Name,
         indexNumber: Number(episode.IndexNumber) || 0,
         duration: episode.RunTimeTicks,
-        playUrl: `${serverBase}/Items/${episode.Id}/Download?api_key=${apiKey}`,
+        playUrl: `${serverBase}/Videos/${episode.Id}/stream?static=true&ApiKey=${encodeURIComponent(apiKey)}`,
       }));
 
       episodes.sort((left, right) => left.indexNumber - right.indexNumber);
@@ -82,7 +81,9 @@ function createAutoplayManager({
       const seriesId = metadata.SeriesId;
       const seasonId = metadata.SeasonId;
       const seriesName = metadata.SeriesName || '';
-      const seasonNumber = Number(metadata.ParentIndexNumber) || 1;
+      // Specials are season 0, so a plain || 1 would relabel them as season 1
+      const parsedSeasonNumber = Number(metadata.ParentIndexNumber ?? 1);
+      const seasonNumber = Number.isFinite(parsedSeasonNumber) ? parsedSeasonNumber : 1;
       const episodeIndexNumber = Number(metadata.IndexNumber) || 0;
 
       if (!seriesId || !seasonId) {
@@ -111,7 +112,11 @@ function createAutoplayManager({
     try {
       const episodes = await fetchSeriesEpisodes(serverBase, seriesId, seasonId, apiKey);
       const currentEpNum = Number(currentEpisodeNumber);
-      const nextEpisode = episodes.find((episode) => episode.indexNumber === currentEpNum + 1);
+      // The list is sorted by episode number, so the first entry above the
+      // current one is the next episode. Matching currentEpNum + 1 exactly
+      // would end the series at any gap: a missing episode, a double episode
+      // counted as two numbers, or a season that does not start at 1.
+      const nextEpisode = episodes.find((episode) => episode.indexNumber > currentEpNum);
 
       if (nextEpisode) {
         log(
@@ -123,7 +128,7 @@ function createAutoplayManager({
       log('No next episode in current season, checking next season...');
 
       const seasonsResponse = await http.get(
-        `${serverBase}/Shows/${seriesId}/Seasons?api_key=${apiKey}`,
+        `${serverBase}/Shows/${seriesId}/Seasons?ApiKey=${encodeURIComponent(apiKey)}`,
         {
           headers: buildJellyfinHeaders(apiKey, { Accept: 'application/json' }),
         }
@@ -227,30 +232,6 @@ function createAutoplayManager({
     }
   }
 
-  function storeCurrentEpisodeInfo(episodeId, seriesInfo) {
-    try {
-      if (!seriesInfo) {
-        log('Series info is null, clearing stored episode info');
-        preferences.set('last_episode_id', '');
-        preferences.set('last_series_id', '');
-        preferences.set('last_season_id', '');
-        preferences.set('last_episode_number', 0);
-        return;
-      }
-
-      log(
-        `Storing episode info for autoplay - Episode: ${episodeId}, Series: ${seriesInfo.seriesId}`
-      );
-      preferences.set('last_episode_id', episodeId);
-      preferences.set('last_series_id', seriesInfo.seriesId);
-      preferences.set('last_season_id', seriesInfo.seasonId);
-      preferences.set('last_episode_number', seriesInfo.currentEpisodeNumber);
-      preferences.sync();
-    } catch (error) {
-      log(`Error storing episode info: ${error.message}`);
-    }
-  }
-
   function setupAutoplayForEpisode(serverBase, episodeId, apiKey) {
     if (lastProcessedEpisodeId === episodeId) {
       log(`Episode ${episodeId} already being processed, skipping duplicate setup`);
@@ -290,8 +271,6 @@ function createAutoplayManager({
           lastProcessedSeriesId = seriesInfo.seriesId;
         }
 
-        storeCurrentEpisodeInfo(episodeId, seriesInfo);
-
         const nextEpisode = await resolveNextEpisode(
           serverBase,
           seriesInfo.seriesId,
@@ -310,7 +289,8 @@ function createAutoplayManager({
           return;
         }
 
-        const seasonNum = nextEpisode.seasonNumber || seriesInfo.seasonNumber;
+        // ?? rather than ||: season 0 is a real season number
+        const seasonNum = nextEpisode.seasonNumber ?? seriesInfo.seasonNumber;
         queueNextEpisode(nextEpisode, seriesInfo.seriesName, seasonNum);
 
         log(`Autoplay setup complete — queued next episode: ${nextEpisode.name}`);
@@ -328,6 +308,9 @@ function createAutoplayManager({
   }
 
   function clearQueuedFlag() {
+    // A manual queue/open supersedes metadata requests still resolving the
+    // previous episode. They must not overwrite the new playlist afterward.
+    autoplayRequestCounter++;
     autoplayQueued = false;
   }
 
