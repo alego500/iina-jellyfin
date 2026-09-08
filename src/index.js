@@ -21,6 +21,7 @@ const {
   utils,
   preferences,
   mpv,
+  playlist,
   sidebar,
   global,
   standaloneWindow,
@@ -514,12 +515,15 @@ function flushPendingPlaylistQueue(fileUrl) {
   }
 
   try {
-    for (const item of items) {
-      const args = [item.streamUrl, 'append'];
-      if (item.title) {
-        args.push('-1', `force-media-title=${item.title}`);
-      }
-      mpv.command('loadfile', args);
+    // Use IINA's batch API so its playlist model and UI update together.
+    // Passing titles as mpv loadfile options loses entries when a title has a
+    // comma: mpv interprets that text as another option. Queue URLs only.
+    const added = playlist.add(
+      items.map((item) => item.streamUrl),
+      -1
+    );
+    if (added === false) {
+      throw new Error('IINA could not append the playlist');
     }
     debugLog(`Appended ${items.length} queued item(s) to the playlist`);
   } catch (error) {

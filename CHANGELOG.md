@@ -4,6 +4,7 @@
 
 ### Compatibility and integration
 
+- Fix Play All dropping entries whose titles contain commas: append URLs through IINA's native playlist API instead of parsing titles as mpv options. Verified the 80-item subscriptions playlist in IINA after restarting to load the current plugin.
 - Merge upstream v0.7.2 while preserving the personal plugin identifier and settings.
 - Use modern Jellyfin authentication for Jellyfin 12; normalize legacy authenticated media links before opening them.
 - Retain album/playlist queues and direct Jellyfin web-link opening, using upstream's deferred queue loading.

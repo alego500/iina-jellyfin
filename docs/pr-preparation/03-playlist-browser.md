@@ -6,6 +6,7 @@ Local only. Branch: `codex/pr-playlist-browser`. Base: `codex/pr-jellyfin-12-aut
 
 - Add a Playlists tab, playlist search chip, item details view, and Open in Jellyfin action.
 - Add Play All controls above playlist/album item lists and use upstream's `play-media-list` message flow.
+- Append the remaining URLs with IINA's native playlist API, avoiding dropped entries caused by commas in mpv title options.
 - Fetch every page of playlist listings and playlist contents in pages of 100 instead of silently truncating long playlists.
 - Preserve server order and duplicate entries; filter out folders/non-playable containers.
 - Use audio/video stream routes and descriptive music/movie/episode titles, including season 0.
@@ -18,7 +19,8 @@ Upstream already implements album Play All, deferred queue append, stale-request
 ## Validation
 
 - `pnpm run check`
-- `node --test tests/*.test.cjs` — 6 tests including prerequisites.
+- `node --test tests/*.test.cjs` — 7 tests including prerequisites.
+- Native IINA verification: the subscriptions playlist now adds all 80 entries; the older per-file title option path added only 74. A regression test covers an 80-item list with comma-containing titles.
 - Tests cover pagination beyond 100 entries, duplicate ordering, a changed-server response, audio/video routing, season 0, and HTML escaping.
 - Read-only checks against Jellyfin 12 fetched the existing playlist's 80 entries. Pagination beyond one page is covered by synthetic fixtures, not by that live playlist.
 

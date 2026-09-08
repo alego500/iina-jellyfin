@@ -36,7 +36,7 @@ References: [Jellyfin 12 release](https://github.com/jellyfin/jellyfin/releases/
 
 | Area                             | What upstream added                                                                                                             | Integration decision                                                                                                               |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Album Play All                   | Full album queue, deferred append after the first file loads, correct playlist clearing                                         | Use upstream's normal per-item append and autoplay behavior; the unsuccessful custom titled-queue implementation was removed       |
+| Album Play All                   | Full album queue, deferred append after the first file loads, correct playlist clearing                                         | Keep upstream's deferred opening and autoplay; append URLs through IINA's native API after a follow-up comma-title bug fix         |
 | Browser without a visible player | Working standalone messaging, correct window API calls, reopen after player closure                                             | Use upstream instead of the fork's older window workarounds                                                                        |
 | Sessions and credentials         | Reuse signed-in sessions, retain URL sessions, notify both browser views, respect auto-login preference                         | Adopt upstream; retain the fork's stricter complete-server-base boundary for connected-account reporting                           |
 | Asynchronous work                | Drop stale sidebar responses, resume positions, and playback session starts                                                     | Adopt upstream's targeted guards instead of the fork's broad delayed post-load workaround; extend request guards to playlist views |
@@ -56,8 +56,8 @@ A PR compares a branch with a base. These branches exclude personal branding and
 | Draft                                                | Local branch                | Review base                  | Tip       |
 | ---------------------------------------------------- | --------------------------- | ---------------------------- | --------- |
 | [Jellyfin 12 authentication](01-jellyfin-12-auth.md) | `codex/pr-jellyfin-12-auth` | `upstream/main` at `49c7a37` | `a6dfb0b` |
-| [Playlist browser](03-playlist-browser.md)           | `codex/pr-playlist-browser` | `codex/pr-jellyfin-12-auth`  | `6457d50` |
-| [Open web links](04-web-links.md)                    | `codex/pr-web-links`        | `codex/pr-jellyfin-12-auth`  | `9bc7070` |
+| [Playlist browser](03-playlist-browser.md)           | `codex/pr-playlist-browser` | `codex/pr-jellyfin-12-auth`  | `bf71f20` |
+| [Open web links](04-web-links.md)                    | `codex/pr-web-links`        | `codex/pr-jellyfin-12-auth`  | `4f574c2` |
 
 Playlist browsing and web-link opening are sibling branches: neither requires the other. The authentication fix is a new compatibility proposal, not a pre-existing personal feature. The complete integration is on `main` and `codex/integrate-upstream-0.7.2`; the separate PR commits are preserved on their own branches, not submitted as a combined proposal. The complete-server-base reporting guard and personal branding remain fork-only changes.
 
@@ -72,7 +72,7 @@ Do not submit these branches directly against upstream main while their prerequi
 
 ## Changed files and validation
 
-- `src/index.js`: combine upstream opening/tracking lifecycle with normal per-item queues and a pre-load web resolver; remove superseded workarounds.
+- `src/index.js`: combine upstream opening/tracking lifecycle with native IINA batch queue append and a pre-load web resolver; remove superseded workarounds.
 - `src/lib/auth-url.js`: translate legacy media-link token parameter names to `ApiKey`.
 - `src/lib/web-url-resolver.js`: resolve saved-server details links, fetch complete playlists, and choose audio/video stream routes.
 - `src/lib/jellyfin-api.js`, `media-actions.js`, `playback-tracking.js`, `autoplay-manager.js`: upstream fixes plus modern authenticated URLs; standard upstream autoplay behavior.
@@ -80,7 +80,7 @@ Do not submit these branches directly against upstream main while their prerequi
 - `src/ui/sidebar/`: retain the personal playlist tab, items, search chip, and top-positioned Play All controls; integrate upstream UI fixes, modern headers, pagination, stale-request guards, and escaping.
 - `Info.json`, `package.json`, `pnpm-lock.yaml`, `.release-please-manifest.json`: upstream version/dependency updates, preserving fork identity.
 - `README.md`, `CHANGELOG.md`, `help.html`, `pref.html`: updated usage/release information; `docs/pr-preparation/` contains this audit and the three remaining draft bodies.
-- `tests/*.test.cjs` and `tests/helpers.cjs`: 12 passing regression tests on the combined fork. Run `node --test tests/*.test.cjs`.
+- `tests/*.test.cjs` and `tests/helpers.cjs`: 13 passing regression tests on the combined fork. Run `node --test tests/*.test.cjs`.
 
 `pnpm run check` passed. IINA's bundled `iina-plugin pack .` produced a valid plugin archive. Test fixtures contain synthetic credentials only. Dependencies were installed with lifecycle scripts disabled.
 
@@ -88,9 +88,9 @@ Do not submit these branches directly against upstream main while their prerequi
 
 Installed IINA: **1.4.4**. The existing development symlink correctly points from `~/Library/Application Support/com.colliderli.iina/plugins/iina-jellyfin.iinaplugin-dev` to `/Users/alego/IINA_Plugins/iina-jellyfin`.
 
-No reinstall/copy is required after edits, but this is **not live hot-reloading**: restart IINA to reload JavaScript and metadata, as described in the [IINA development guide](https://docs.iina.io/pages/dev-guide.html). IINA was not restarted or interrupted during this task.
+No reinstall/copy is required after edits, but this is **not live hot-reloading**: restart IINA to reload JavaScript and metadata, as described in the [IINA development guide](https://docs.iina.io/pages/dev-guide.html). IINA was restarted during the follow-up Play All verification to ensure it loaded the current files.
 
-After restarting, check the playlist tab, Play All while another item is playing, an episode queue with autoplay enabled, and a saved-server web details link. Actual UI playback remains unverified.
+After restarting, check the playlist tab, Play All while another item is playing, an episode queue with autoplay enabled, and a saved-server web details link. Follow-up native verification reproduced the original one-item queue while the removed titled-queue implementation was still loaded in memory. After reloading, the current per-file append path produced only 74 of 80 entries; titles containing commas were interpreted as mpv options. Switching to IINA's native playlist API fixed this: the subscriptions playlist now shows all 80 entries after Play All, with playback left paused. This is not an end-to-end test of every entry or of episodic autoplay.
 
 ## Alternative check
 

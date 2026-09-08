@@ -8,6 +8,8 @@ function setup(get) {
   const hooks = {};
   const events = {};
   const commands = [];
+  const appended = [];
+  const sidebarHandlers = {};
   const properties = { 'stream-open-filename': webUrl };
   const values = {
     jellyfin_servers: JSON.stringify([
@@ -18,7 +20,12 @@ function setup(get) {
     autoplay_next_episode: false,
   };
   const iina = {
-    core: { osd() {} },
+    core: {
+      osd() {},
+      open(url) {
+        properties['stream-open-filename'] = url;
+      },
+    },
     console,
     menu: { item() {}, addItem() {} },
     event: {
@@ -45,14 +52,27 @@ function setup(get) {
       },
       command: (name, args) => commands.push({ name, args }),
     },
-    sidebar: {},
+    playlist: {
+      add: (urls, at) => {
+        appended.push({ urls, at });
+        return true;
+      },
+    },
+    sidebar: {
+      loadFile() {},
+      postMessage() {},
+      onMessage: (name, callback) => {
+        sidebarHandlers[name] = callback;
+      },
+    },
     standaloneWindow: {},
   };
   loadModule('src/index.js', {
     iina,
+    setTimeout() {},
     require: (path) => loadModule('src/' + path.slice(2)),
   });
-  return { hooks, events, commands, properties, iina };
+  return { hooks, events, commands, appended, sidebarHandlers, properties, iina };
 }
 
 test('web load hook resolves before continuing and appends only after the first load', async () => {
@@ -76,17 +96,37 @@ test('web load hook resolves before continuing and appends only after the first 
   assert.equal(state.commands.length, 0);
   // IINA may report the original web URL, not mpv's overridden stream URL.
   state.events['iina.file-loaded'](webUrl);
-  assert.equal(state.commands[0].name, 'loadfile');
-  assert.equal(state.commands[0].args[1], 'append');
+  assert.equal(state.commands.length, 0, 'do not construct mpv title options');
+  assert.equal(state.appended[0].at, -1);
   assert.equal(
-    state.commands[0].args[0],
+    state.appended[0].urls[0],
     'https://host/Audio/second/stream?static=true&ApiKey=test-token'
   );
   assert.equal(requests, 2);
   state.events['iina.file-loaded'](
     'https://host/Audio/second/stream?static=true&ApiKey=test-token'
   );
-  assert.equal(state.commands.length, 1, 'queue is appended once only');
+  assert.equal(state.appended.length, 1, 'queue is appended once only');
+});
+
+test('sidebar Play All appends all 79 remaining URLs even when titles contain commas', () => {
+  const state = setup(() => assert.fail('No metadata lookup needed to append a queue'));
+  state.events['iina.window-loaded']();
+  const items = Array.from({ length: 80 }, (_, i) => ({
+    streamUrl: `https://host/Videos/item${i}/stream?static=true&ApiKey=test-token`,
+    title: i % 2 ? 'Flying a plane badly, on purpose' : 'The 36,000-Foot Submarine',
+  }));
+  state.sidebarHandlers['play-media-list']({ items });
+  assert.equal(state.appended.length, 0, 'wait for the replacing first file to load');
+  assert.equal(state.properties['stream-open-filename'], items[0].streamUrl);
+  state.events['iina.file-loaded'](items[0].streamUrl);
+  assert.equal(state.appended.length, 1);
+  assert.equal(state.appended[0].urls.length, 79);
+  assert.deepEqual(
+    Array.from(state.appended[0].urls),
+    items.slice(1).map((item) => item.streamUrl)
+  );
+  assert.equal(state.commands.filter((command) => command.name === 'loadfile').length, 0);
 });
 
 test('web hook always continues even when the mpv property read fails', async () => {
