@@ -308,9 +308,6 @@ function createAutoplayManager({
   }
 
   function clearQueuedFlag() {
-    // A manual queue/open supersedes metadata requests still resolving the
-    // previous episode. They must not overwrite the new playlist afterward.
-    autoplayRequestCounter++;
     autoplayQueued = false;
   }
 

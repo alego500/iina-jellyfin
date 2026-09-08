@@ -1,6 +1,6 @@
 # Draft: add Jellyfin playlist browsing and complete Play All queues
 
-Local only. Branch: `codex/pr-playlist-browser`. Base: `codex/pr-titled-queues`.
+Local only. Branch: `codex/pr-playlist-browser`. Base: `codex/pr-jellyfin-12-auth`.
 
 ## Changes
 
@@ -18,7 +18,7 @@ Upstream already implements album Play All, deferred queue append, stale-request
 ## Validation
 
 - `pnpm run check`
-- `node --test tests/*.test.cjs` — 8 tests including prerequisites.
+- `node --test tests/*.test.cjs` — 6 tests including prerequisites.
 - Tests cover pagination beyond 100 entries, duplicate ordering, a changed-server response, audio/video routing, season 0, and HTML escaping.
 - Read-only checks against Jellyfin 12 fetched the existing playlist's 80 entries. Pagination beyond one page is covered by synthetic fixtures, not by that live playlist.
 
@@ -27,4 +27,4 @@ Upstream already implements album Play All, deferred queue append, stale-request
 - Playlist tab and search, open/back navigation, Open in Jellyfin, empty/error states.
 - Play All with no visible player, with a playing item, and from the standalone browser.
 - Long playlists, mixed media, unavailable media, and switching servers during loading.
-- Confirm titles and queue order in the native IINA playlist; these GUI checks remain outstanding.
+- Confirm queue order and normal playback in the native IINA playlist; these GUI checks remain outstanding.

@@ -8,7 +8,6 @@ function setup(get) {
   const hooks = {};
   const events = {};
   const commands = [];
-  const writes = [];
   const properties = { 'stream-open-filename': webUrl };
   const values = {
     jellyfin_servers: JSON.stringify([
@@ -16,7 +15,7 @@ function setup(get) {
     ]),
     jellyfin_active_server_id: 's',
     jellyfin_device_id: 'test-device',
-    autoplay_next_episode: true,
+    autoplay_next_episode: false,
   };
   const iina = {
     core: { osd() {} },
@@ -51,12 +50,9 @@ function setup(get) {
   };
   loadModule('src/index.js', {
     iina,
-    require: (path) =>
-      path === 'fs'
-        ? { writeFileSync: (path, content) => writes.push({ path, content }) }
-        : loadModule('src/' + path.slice(2)),
+    require: (path) => loadModule('src/' + path.slice(2)),
   });
-  return { hooks, events, commands, writes, properties, iina };
+  return { hooks, events, commands, properties, iina };
 }
 
 test('web load hook resolves before continuing and appends only after the first load', async () => {
@@ -80,14 +76,13 @@ test('web load hook resolves before continuing and appends only after the first 
   assert.equal(state.commands.length, 0);
   // IINA may report the original web URL, not mpv's overridden stream URL.
   state.events['iina.file-loaded'](webUrl);
-  assert.equal(state.commands[0].name, 'loadlist');
+  assert.equal(state.commands[0].name, 'loadfile');
   assert.equal(state.commands[0].args[1], 'append');
-  assert.match(state.writes[0].content, /#EXTINF:-1,Two\nhttps:\/\/host\/Audio\/second/);
   assert.equal(
-    requests,
-    2,
-    'explicit episode queue must not trigger automatic next-episode lookup'
+    state.commands[0].args[0],
+    'https://host/Audio/second/stream?static=true&ApiKey=test-token'
   );
+  assert.equal(requests, 2);
   state.events['iina.file-loaded'](
     'https://host/Audio/second/stream?static=true&ApiKey=test-token'
   );

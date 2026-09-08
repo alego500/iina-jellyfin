@@ -6,7 +6,8 @@
 
 - Merge upstream v0.7.2 while preserving the personal plugin identifier and settings.
 - Use modern Jellyfin authentication for Jellyfin 12; normalize legacy authenticated media links before opening them.
-- Retain complete, titled album/playlist queues and direct Jellyfin web-link opening, using upstream's deferred queue loading.
+- Retain album/playlist queues and direct Jellyfin web-link opening, using upstream's deferred queue loading.
+- Remove the unsuccessful titled-queue implementation, temporary M3U generation, custom queue/autoplay overrides, and its local PR proposal. Restore upstream's normal per-item append behavior.
 - Add paginated playlist loading, escaped playlist text, and regression tests.
 - Keep the fork's exact server-base check for connected-account reporting; adopt upstream's session, lifecycle, stale-response, and security fixes.
 - Prepare local PR branches and draft descriptions without publishing them.

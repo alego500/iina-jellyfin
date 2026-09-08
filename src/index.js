@@ -2,8 +2,6 @@
  * IINA Jellyfin Plugin
  */
 
-const fs = require('fs');
-const { createTitledQueue } = require('./lib/titled-queue.js');
 const { normalizeJellyfinAuthUrl } = require('./lib/auth-url.js');
 const { createWebUrlResolver } = require('./lib/web-url-resolver.js');
 
@@ -56,7 +54,6 @@ function consumeReplacementGuard() {
 }
 
 const debugLog = createDebugLogger(preferences, console);
-const titledQueue = createTitledQueue({ fs, utils, mpv, log: debugLog });
 
 const {
   getClientIdentity,
@@ -218,7 +215,7 @@ function onFileLoaded(fileUrl) {
     }
 
     // Setup autoplay for TV episodes if enabled
-    if (preferences.get('autoplay_next_episode') && !titledQueue.includes(fileUrl)) {
+    if (preferences.get('autoplay_next_episode')) {
       debugLog(`Setting up autoplay for episode (itemId): ${jellyfinInfo.itemId}`);
       resetForNewFile(jellyfinInfo.itemId);
       setupAutoplayForEpisode(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
@@ -517,7 +514,13 @@ function flushPendingPlaylistQueue(fileUrl) {
   }
 
   try {
-    titledQueue.append(items);
+    for (const item of items) {
+      const args = [item.streamUrl, 'append'];
+      if (item.title) {
+        args.push('-1', `force-media-title=${item.title}`);
+      }
+      mpv.command('loadfile', args);
+    }
     debugLog(`Appended ${items.length} queued item(s) to the playlist`);
   } catch (error) {
     debugLog('Could not append queued items: ' + error);
@@ -540,7 +543,6 @@ function handlePlayMediaList(message) {
   }
 
   const [firstItem, ...queuedItems] = items;
-  titledQueue.remember(items);
 
   try {
     if (queuedItems.length > 0) {
@@ -580,8 +582,6 @@ function handlePlayMedia(message) {
     streamUrl: message?.streamUrl,
   });
   const { streamUrl, title } = message;
-  pendingPlaylistQueue = null;
-  titledQueue.remember([]);
   debugLog(`Opening media: ${title} - ${streamUrl}`);
 
   try {
@@ -615,7 +615,6 @@ mpv.addHook('on_load', 50, async (next) => {
     if (!items || mpv.getString('stream-open-filename') !== url) return;
     const [first, ...rest] = items;
     clearQueuedFlag();
-    titledQueue.remember(items);
     pendingPlaylistQueue = rest.length
       ? { items: rest, at: Date.now(), itemId: first.itemId }
       : null;
