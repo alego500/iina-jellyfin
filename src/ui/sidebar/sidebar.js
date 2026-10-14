@@ -104,6 +104,8 @@ class JellyfinSidebar {
     this.selectedAlbum = null;
     this.selectedTrack = null;
     this.albumTracks = [];
+    this.selectedPlaylist = null;
+    this.playlistItems = [];
     this.searchTimeout = null;
     this.pendingSessionData = null;
 
@@ -298,6 +300,18 @@ class JellyfinSidebar {
       this.hideAlbumTracks();
     });
 
+    document.getElementById('playAllPlaylistItemsBtn').addEventListener('click', () => {
+      this.playAllPlaylistItems();
+    });
+
+    document.getElementById('openPlaylistInJellyfinBtn').addEventListener('click', () => {
+      this.openPlaylistInJellyfin();
+    });
+
+    document.getElementById('cancelPlaylistItemsBtn').addEventListener('click', () => {
+      this.hidePlaylistItems();
+    });
+
     // Enter submits from any field of the form it belongs to
     const submitOnEnter = (id, submit) => {
       const field = document.getElementById(id);
@@ -338,6 +352,8 @@ class JellyfinSidebar {
           this.loadSeries();
         } else if (tabName === 'music' && this.currentUser) {
           this.loadMusic();
+        } else if (tabName === 'playlists' && this.currentUser) {
+          this.loadPlaylists();
         }
       });
     });

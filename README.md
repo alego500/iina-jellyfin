@@ -22,6 +22,7 @@ An comprehensive IINA plugin that provides Jellyfin media server integration, in
 - **Recent items browser**: Browse recently added movies and TV shows
 - **Music library browser**: Browse your music library by albums, artists, or songs with album artwork
 - **Album track listing**: View and play individual tracks from any album
+- **Playlist browsing**: Browse and search Jellyfin playlists, inspect their ordered items, and play the complete list in one IINA window
 - **Search functionality**: Search your Jellyfin library for specific content
 - **Advanced filtering & sorting**: Sort by name, date added, release date, or rating; filter by watch status, favorites, and genre
 - **Series episode selection**: Browse seasons and episodes for TV shows
@@ -104,7 +105,7 @@ Once you have servers saved:
 
 #### Browsing and Playback
 
-1. Browse media in the tabs: Home (Continue Watching, Up Next, Recently Added), Movies, TV Series, Music, or Search
+1. Browse media in the tabs: Home (Continue Watching, Up Next, Recently Added), Movies, TV Series, Music, Playlists, or Search
 2. Click any media item to play it in IINA
 3. Use the player controls or keyboard shortcuts to control playback
 4. Your progress will automatically sync back to Jellyfin
@@ -122,6 +123,14 @@ The Music tab provides three views for browsing your music collection:
 Click an album to view its track listing. From there you can play individual tracks or use "Play All" to start the album. Use the Filter/Sort button to sort by name, date, or rating, and filter by genre.
 
 Search also supports music content — use the "Albums" and "Songs" filter chips to find music across your library.
+
+##### Playlists
+
+The **Playlists** tab shows playlists available to your connected account. Open one to inspect
+its items, play an individual item, or use **Play All** to queue the complete list in server order.
+Playlist search is also available through the **Playlists** search filter. **Open in Jellyfin**
+opens the selected playlist in your web browser. Album and playlist Play All controls appear
+above their item lists; multi-item playback uses the current window so the queue stays together.
 
 ##### Advanced Filtering & Sorting
 
