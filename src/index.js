@@ -3,6 +3,7 @@
  */
 
 const { createDebugLogger } = require('./lib/debug-log.js');
+const { normalizeJellyfinAuthUrl } = require('./lib/auth-url.js');
 const { createJellyfinApi, isSameJellyfinServer } = require('./lib/jellyfin-api.js');
 const { createServerSessionStore } = require('./lib/server-session-store.js');
 const { createPlaybackTrackingManager } = require('./lib/playback-tracking.js');
@@ -671,6 +672,19 @@ function handlePlayMedia(message) {
 }
 
 // Event handlers
+// Translate older shared-media credentials before mpv requests the stream.
+mpv.addHook('on_load', 10, async (next) => {
+  try {
+    const url = mpv.getString('stream-open-filename');
+    const normalized = normalizeJellyfinAuthUrl(url);
+    if (normalized !== url) mpv.set('stream-open-filename', normalized);
+  } catch (error) {
+    debugLog('Could not normalize Jellyfin credentials: ' + error.message);
+  } finally {
+    next();
+  }
+});
+
 event.on('iina.file-loaded', onFileLoaded);
 
 // Holds the load until the Jellyfin title is set, so the playlist entry gets
