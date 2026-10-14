@@ -1,6 +1,6 @@
 # Draft: browse and play Jellyfin playlists from IINA
 
-Branch: `codex/pr-playlist-browser`. Base: `codex/pr-native-queue-append` on upstream v0.7.5. Status: local, unpublished.
+Branch: `codex/pr-playlist-browser`. Base: `codex/pr-native-queue-append` on upstream v0.7.5. Published draft: [PR #2](https://github.com/alego500/iina-jellyfin/pull/2) in the personal fork; depends on PR #1.
 
 ## Result
 

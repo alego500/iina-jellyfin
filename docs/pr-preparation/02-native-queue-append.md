@@ -1,6 +1,6 @@
 # Draft: append library queues through IINA's playlist API
 
-Branch: `codex/pr-native-queue-append`. Base: upstream `main` at `b7a5191` (v0.7.5). Status: local, unpublished.
+Branch: `codex/pr-native-queue-append`. Base: upstream v0.7.5 snapshot `codex/review-upstream-0.7.5`. Published draft: [PR #1](https://github.com/alego500/iina-jellyfin/pull/1) in the personal fork.
 
 ## Problem and result
 

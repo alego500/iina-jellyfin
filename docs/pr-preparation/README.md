@@ -1,6 +1,15 @@
 # Upstream update and prepared pull requests
 
-Prepared 2026-10-14. The proposals are local branches and draft descriptions; no branches were pushed and no GitHub pull requests were opened.
+Prepared and published as draft pull requests on 2026-10-14 in the personal fork. No pull requests were submitted to the original project.
+
+## Published drafts
+
+- [#1 — Native IINA queue append](https://github.com/alego500/iina-jellyfin/pull/1)
+- [#2 — Playlist browser, search, and Play All](https://github.com/alego500/iina-jellyfin/pull/2)
+- [#3 — Direct Jellyfin web-link opening](https://github.com/alego500/iina-jellyfin/pull/3)
+- [#4 — Legacy authenticated media-link normalization](https://github.com/alego500/iina-jellyfin/pull/4)
+
+All four are drafts. PRs #1 and #4 target `codex/review-upstream-0.7.5`, an exact upstream v0.7.5 snapshot published in the personal fork. PRs #2 and #3 target #1's branch so their feature diffs remain separate. The repository's remote main branch was not changed.
 
 ## Updated fork
 
@@ -49,7 +58,7 @@ git diff codex/pr-native-queue-append...codex/pr-web-links
 git diff upstream/main...codex/pr-legacy-media-links
 ```
 
-When publication is authorized, the prerequisite should land first, or the feature branches must be rebased to an agreed upstream queue implementation. Submitting the dependent branches directly against upstream main now would include the native queue commit. No publishing commands were run.
+If these changes are later proposed to the original project, the prerequisite should land first, or the feature branches must be rebased to an agreed upstream queue implementation. Submitting the dependent branches directly against upstream main now would include the native queue commit. The five review branches have been pushed only to the personal fork.
 
 Previous PR tips are preserved under `codex/archive-2026-10-14-pr-*`. The previous main is preserved as `codex/backup-before-upstream-0.7.5`. Historical commits remain recoverable.
 

@@ -1,6 +1,6 @@
 # Draft: open Jellyfin web details links directly in IINA
 
-Branch: `codex/pr-web-links`. Base: `codex/pr-native-queue-append` on upstream v0.7.5. Status: local, unpublished.
+Branch: `codex/pr-web-links`. Base: `codex/pr-native-queue-append` on upstream v0.7.5. Published draft: [PR #3](https://github.com/alego500/iina-jellyfin/pull/3) in the personal fork; depends on PR #1.
 
 ## Result
 

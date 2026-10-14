@@ -1,6 +1,6 @@
 # Draft: normalize credentials in older Jellyfin media links
 
-Branch: `codex/pr-legacy-media-links`. Base: upstream `main` at `b7a5191` (v0.7.5). Status: local, unpublished.
+Branch: `codex/pr-legacy-media-links`. Base: upstream v0.7.5 snapshot `codex/review-upstream-0.7.5`. Published draft: [PR #4](https://github.com/alego500/iina-jellyfin/pull/4) in the personal fork.
 
 ## Problem and result
 
