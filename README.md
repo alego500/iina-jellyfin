@@ -153,6 +153,7 @@ Click the "Filter/Sort" button in the Movies or TV Series tab header to toggle t
 
 The plugin automatically detects and processes Jellyfin URLs in these formats:
 
+- Older authenticated media links using `api_key`, `api-key`, or `x-emby-token` are converted to the supported `ApiKey` query parameter before opening. Other query values and fragments are preserved.
 - Download URLs: `http://server:port/Items/{ItemId}/Download?ApiKey={key}` _(automatically stores credentials for sidebar login)_
 - URLs containing `/Items/` and `ApiKey=` _(automatically stores credentials for sidebar login)_
 - URLs containing "jellyfin", "/Audio/", or "/Videos/"
