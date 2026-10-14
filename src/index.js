@@ -18,6 +18,7 @@ const {
   utils,
   preferences,
   mpv,
+  playlist,
   sidebar,
   global,
   standaloneWindow,
@@ -570,24 +571,17 @@ function flushPendingPlaylistQueue(fileUrl) {
     return;
   }
 
-  // loadfile carries per-file options, so each queued entry keeps its own
-  // title instead of showing a raw URL in the playlist. One failing entry must
-  // not drop the rest of the list.
-  const setTitles = preferences.get('set_video_title');
-  let appended = 0;
-  for (const item of items) {
-    try {
-      const args = [item.streamUrl, 'append'];
-      if (item.title && setTitles) {
-        args.push('-1', mediaTitleOption(item.title));
-      }
-      mpv.command('loadfile', args);
-      appended++;
-    } catch (error) {
-      debugLog(`Could not append queued item "${item.title}": ${error}`);
-    }
+  try {
+    // IINA updates its own playlist model and UI when adding this batch.
+    const added = playlist.add(
+      items.map((item) => item.streamUrl),
+      -1
+    );
+    if (added === false) throw new Error('IINA could not append the playlist');
+    debugLog(`Appended ${items.length} queued item(s) to the playlist`);
+  } catch (error) {
+    debugLog('Could not append queued items: ' + error);
   }
-  debugLog(`Appended ${appended} of ${items.length} queued item(s) to the playlist`);
 }
 
 /**
