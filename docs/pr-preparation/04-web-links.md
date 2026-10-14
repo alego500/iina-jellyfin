@@ -1,27 +1,24 @@
-# Draft: open saved-server Jellyfin web links directly in IINA
+# Draft: open Jellyfin web details links directly in IINA
 
-Local only. Branch: `codex/pr-web-links`. Base: `codex/pr-jellyfin-12-auth`. Does not depend on the playlist browser proposal.
+Branch: `codex/pr-web-links`. Base: `codex/pr-native-queue-append` on upstream v0.7.5. Status: local, unpublished.
 
-## Changes
+## Result
 
-- Recognize modern `/web/#/details?id=…` and legacy `/web/index.html#!/details?id=…` links, including reverse proxy paths.
-- Resolve movie, episode, music, video, and playlist metadata before mpv opens the stream.
-- Reuse credentials only for the exact saved server base URL; prefer the active matching account. Validate item IDs and never copy a token to a merely similar host or path.
-- Fetch playlist pages in order, retain duplicates, and open audio/video stream URLs using modern Jellyfin authentication.
-- Append remaining playlist URLs only after the first file loads, using IINA's native playlist API so commas in titles cannot drop entries.
-- Account for IINA reporting the original web URL after mpv opens the resolved stream; always continue the load hook, including on errors, and ignore replaced asynchronous resolutions.
+Users can paste a Jellyfin details link into IINA Open URL. The plugin resolves movie, episode, audio, video, and playlist metadata into playable stream URLs using the saved login for that exact server.
+
+Recognize both `/web/#/details?id=…` and `/web/index.html#!/details?id=…`, including reverse proxy paths. Validate item IDs and prefer the active matching account; credentials are never reused for a different host, scheme, or base path.
+
+Playlist pages retain order and duplicates. Open the first item normally and append the rest after it loads through the native queue prerequisite. Handle IINA reporting the original web URL, ignore replaced asynchronous loads, and always continue the mpv hook.
+
+Resolution runs at priority 40, before upstream's priority-50 title hook, and calls upstream's managed title setter. This respects the title preference and retains upstream's stale-title cleanup.
 
 ## Validation
 
-- `pnpm run check`
-- `node --test tests/*.test.cjs` — 9 tests including prerequisites.
-- Parser tests cover current/legacy URLs, reverse proxies, and rejected routes/IDs.
-- Resolver tests cover active-account selection, pagination, mixed-media titles, and credential isolation.
-- Mocked native-entry tests cover pre-load resolution, deferred single append, hook continuation on property errors, and replaced loads.
+- `pnpm test`: 80 passing tests, including parser formats, proxy paths, rejected IDs, credential isolation, pagination, mixed media, deferred append, cancelled loads, hook continuation, and integration with upstream's title hook.
+- `pnpm run check`: lint and formatting pass.
 
-## Manual checks before submission
+Manual follow-up: movie, episode, audio, and playlist links; no/expired saved login; reverse proxy deployment; native playback and progress reporting in IINA 1.5. These GUI checks were not performed in this update.
 
-- Paste a movie, episode, audio, and playlist web link into IINA Open URL.
-- Test no saved login, expired login, unsupported item, and inaccessible server cases.
-- Verify titles, progress reporting, and playlist continuation after a web-link load in real IINA.
-- Repeat behind a reverse proxy. Mocked hook tests are not a substitute for native playback validation.
+## Dependencies
+
+Review against the native queue branch. This feature is independent of the playlist browser and legacy-link normalizer. No personal branding or release metadata is included.

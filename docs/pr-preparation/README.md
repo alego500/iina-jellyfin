@@ -1,103 +1,69 @@
-# Upstream integration and local PR drafts
+# Upstream update and prepared pull requests
 
-Prepared 2026-09-08. Nothing in this directory has been submitted to GitHub, and no branches have been pushed.
+Prepared 2026-10-14. The proposals are local branches and draft descriptions; no branches were pushed and no GitHub pull requests were opened.
 
-## Result
+## Updated fork
 
 - Original project: [mhajder/iina-jellyfin](https://github.com/mhajder/iina-jellyfin).
-- Personal remote: [alego500/iina-jellyfin](https://github.com/alego500/iina-jellyfin).
-- Previous local main: `3de8dbc`, already merged through upstream v0.7.1.
-- Integrated upstream: `49c7a37`, v0.7.2, released 2026-08-14; 47 upstream commits were missing from the previous main.
-- The fork remains **Jellyfin by alego500**, identifier `com.alego500.iina-jellyfin`; existing settings and saved logins continue to use that identifier.
-- Version values are now `0.7.2` in `Info.json`, `package.json`, the release manifest, and the runtime client identity. `Info.json`'s `ghVersion` is `12`. Upstream's ESLint update is `^10.8.0` → `^10.8.1` with the corresponding lockfile changes.
+- Personal fork: [alego500/iina-jellyfin](https://github.com/alego500/iina-jellyfin).
+- Previous local main: `5b53630`, based on v0.7.2.
+- Latest stable release and main: [v0.7.5](https://github.com/mhajder/iina-jellyfin/releases/tag/v0.7.5), published 2026-10-11, commit `b7a5191`.
+- Integrated 26 upstream commits since v0.7.2.
+- Preserved `Jellyfin by alego500`, `com.alego500.iina-jellyfin`, personal repository metadata, and the saved-settings namespace.
+- Version values: `0.7.2 → 0.7.5` in Info.json, package.json, release manifest, and runtime client identity; Info.json `ghVersion: 12 → 15`.
+- Development dependencies: ESLint `^10.8.1 → ^10.12.0`; Prettier `^3.9.6 → ^3.9.9`, with upstream's lockfile.
+- Added upstream's sidebarTab declaration, required for the browser in IINA 1.5. The installed IINA version is 1.5.0.
 
-## Jellyfin 12 compatibility gate
+## Upstream overlap
 
-The installed server reports **12.0.0**. Upstream v0.7.2 is not fully compatible with its default authentication configuration: the core already builds a modern MediaBrowser header, but the sidebar still sent `X-Emby-Token`, and generated media/artwork URLs used `api_key`.
+| Area                                   | Current upstream behavior                                                                       | Decision                                                                                                                           |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Jellyfin 12 authentication             | Modern headers and ApiKey transport, [PR #94](https://github.com/mhajder/iina-jellyfin/pull/94) | Adopt upstream; retire the broad authentication proposal                                                                           |
+| Commas in queued titles                | Proper quoting in mpv options, [PR #123](https://github.com/mhajder/iina-jellyfin/pull/123)     | Recognize the bug is fixed upstream; keep native queue append as a separate implementation proposal                                |
+| Current-file titles                    | Set before load, clear stale titles, share metadata requests                                    | Adopt upstream; run web-link resolution at priority 40 before upstream's priority-50 title hook                                    |
+| Resume/progress                        | Preserve unplayed resume points, stop replaced items at their own positions                     | Adopt upstream and its tests                                                                                                       |
+| Server matching and logins             | Normalize URL spellings while respecting proxy paths; consistent login/switch state             | Adopt upstream session logic; retain exact saved-base matching for the fork's connected-account reporting and web-link credentials |
+| Sidebar and subtitles                  | IINA 1.5 tab support, current seasons, precise language matching, debug preference              | Adopt upstream                                                                                                                     |
+| Playlist browser and web details links | Neither feature is implemented upstream                                                         | Preserve and prepare as separate feature proposals                                                                                 |
+| Older incoming authenticated links     | Upstream generates modern URLs but does not rewrite incoming legacy token names                 | Prepare a smaller compatibility proposal                                                                                           |
 
-Using the plugin's existing login, read-only probes confirmed:
+The removed titled-queue experiment remains removed. No temporary M3U generation, title prefetch/warmup, or custom queue/autoplay suppression was restored. Standard upstream title and autoplay behavior is retained.
 
-| Request                                                        | Result                                   |
-| -------------------------------------------------------------- | ---------------------------------------- |
-| Public server information                                      | 200; version 12.0.0                      |
-| `/Users/Me`, modern `Authorization: MediaBrowser … Token="…"`  | 200                                      |
-| `/Users/Me`, legacy `X-Emby-Token`                             | 401                                      |
-| `/Users/Me`, legacy `api_key` query                            | 401                                      |
-| `/Users/Me`, modern `ApiKey` query                             | 200                                      |
-| Library items, item metadata, PlaybackInfo, user views         | 200                                      |
-| Playlist listing and playlist contents                         | 200; 80 entries in the existing playlist |
-| Static stream with modern `ApiKey`, a 1,024-byte range request | 206; 1,024 bytes read                    |
+## Review branches
 
-The authentication patch keeps modern defaults; server legacy authorization was not enabled. No playback-reporting POSTs or watch-state mutations were performed. This is targeted compatibility validation, not certification of every Jellyfin 12 feature. Quick Connect, subtitle downloads, actual IINA playback/progress reporting, and end-to-end multi-item playback still need a manual smoke test.
+| Proposal                                                   | Branch                         | Review base                    | Tip       | Tests |
+| ---------------------------------------------------------- | ------------------------------ | ------------------------------ | --------- | ----- |
+| [Older media-link compatibility](01-legacy-media-links.md) | `codex/pr-legacy-media-links`  | `upstream/main` at `b7a5191`   | `e323666` | 75    |
+| [Native queue append](02-native-queue-append.md)           | `codex/pr-native-queue-append` | `upstream/main` at `b7a5191`   | `3cc1a29` | 73    |
+| [Feature: playlist browser](03-playlist-browser.md)        | `codex/pr-playlist-browser`    | `codex/pr-native-queue-append` | `44764b2` | 77    |
+| [Feature: open web links](04-web-links.md)                 | `codex/pr-web-links`           | `codex/pr-native-queue-append` | `30cb933` | 80    |
 
-References: [Jellyfin 12 release](https://github.com/jellyfin/jellyfin/releases/tag/v12.0), [server authorization implementation](https://github.com/jellyfin/jellyfin/blob/v12.0/Jellyfin.Server.Implementations/Security/AuthorizationContext.cs).
+The two feature branches are siblings; neither includes the other. They use the native queue proposal as a shared prerequisite. Legacy-link normalization is independent. The complete fork additionally retains personal branding, encoded token values, and its stricter reporting-server boundary.
 
-## Upstream overlap with the personal fork
-
-| Area                             | What upstream added                                                                                                             | Integration decision                                                                                                               |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Album Play All                   | Full album queue, deferred append after the first file loads, correct playlist clearing                                         | Keep upstream's deferred opening and autoplay; append URLs through IINA's native API after a follow-up comma-title bug fix         |
-| Browser without a visible player | Working standalone messaging, correct window API calls, reopen after player closure                                             | Use upstream instead of the fork's older window workarounds                                                                        |
-| Sessions and credentials         | Reuse signed-in sessions, retain URL sessions, notify both browser views, respect auto-login preference                         | Adopt upstream; retain the fork's stricter complete-server-base boundary for connected-account reporting                           |
-| Asynchronous work                | Drop stale sidebar responses, resume positions, and playback session starts                                                     | Adopt upstream's targeted guards instead of the fork's broad delayed post-load workaround; extend request guards to playlist views |
-| Security                         | Escape server text in HTML and redact credentials in logs                                                                       | Adopt upstream and apply the same HTML escaping to playlist entries                                                                |
-| Media correctness                | Stream endpoints rather than downloads, working external-subtitle routes, reverse proxy paths, season 0 and episode-number gaps | Adopt upstream and use its stream conventions in the added features                                                                |
-| Plugin lifecycle                 | Remove subscriptions to events that never fire; fix global handlers, shortcut, end-of-playback reporting                        | Adopt upstream                                                                                                                     |
-| Distinct personal features       | No dedicated playlist browser or saved-server web details resolver upstream                                                     | Keep and prepare as separate feature branches                                                                                      |
-
-Earlier experimental title prefetch/warmup work had already been removed in the personal history; it is not reintroduced. The old load-failure retry is replaced by a pre-load resolver with guaranteed hook continuation and a test for replaced loads.
-
-The titled-queue experiment was removed after the user reported that it did not work. Its module, dedicated tests, custom autoplay overrides, PR draft, and local proposal branch are removed. Both remaining feature branches now depend directly on the authentication fix. Historical commits remain recoverable in Git.
-
-## Local review branches
-
-A PR compares a branch with a base. These branches exclude personal branding and release metadata. Review only the difference from the listed base, so prerequisite changes do not appear as part of the next proposal.
-
-| Draft                                                | Local branch                | Review base                  | Tip       |
-| ---------------------------------------------------- | --------------------------- | ---------------------------- | --------- |
-| [Jellyfin 12 authentication](01-jellyfin-12-auth.md) | `codex/pr-jellyfin-12-auth` | `upstream/main` at `49c7a37` | `a6dfb0b` |
-| [Playlist browser](03-playlist-browser.md)           | `codex/pr-playlist-browser` | `codex/pr-jellyfin-12-auth`  | `bf71f20` |
-| [Open web links](04-web-links.md)                    | `codex/pr-web-links`        | `codex/pr-jellyfin-12-auth`  | `4f574c2` |
-
-Playlist browsing and web-link opening are sibling branches: neither requires the other. The authentication fix is a new compatibility proposal, not a pre-existing personal feature. The complete integration is on `main` and `codex/integrate-upstream-0.7.2`; the separate PR commits are preserved on their own branches, not submitted as a combined proposal. The complete-server-base reporting guard and personal branding remain fork-only changes.
-
-Example local review:
+Review each change against its listed base:
 
 ```sh
-git diff codex/pr-jellyfin-12-auth...codex/pr-playlist-browser
-git log --oneline codex/pr-jellyfin-12-auth..codex/pr-web-links
+git diff upstream/main...codex/pr-native-queue-append
+git diff codex/pr-native-queue-append...codex/pr-playlist-browser
+git diff codex/pr-native-queue-append...codex/pr-web-links
+git diff upstream/main...codex/pr-legacy-media-links
 ```
 
-Do not submit these branches directly against upstream main while their prerequisites are unmerged: that would include prerequisite commits. If publication is later authorized, submit the authentication fix first, then rebase the dependent proposals onto upstream as prerequisites land. No publishing commands were run.
+When publication is authorized, the prerequisite should land first, or the feature branches must be rebased to an agreed upstream queue implementation. Submitting the dependent branches directly against upstream main now would include the native queue commit. No publishing commands were run.
 
-## Changed files and validation
+Previous PR tips are preserved under `codex/archive-2026-10-14-pr-*`. The previous main is preserved as `codex/backup-before-upstream-0.7.5`. Historical commits remain recoverable.
 
-- `src/index.js`: combine upstream opening/tracking lifecycle with native IINA batch queue append and a pre-load web resolver; remove superseded workarounds.
-- `src/lib/auth-url.js`: translate legacy media-link token parameter names to `ApiKey`.
-- `src/lib/web-url-resolver.js`: resolve saved-server details links, fetch complete playlists, and choose audio/video stream routes.
-- `src/lib/jellyfin-api.js`, `media-actions.js`, `playback-tracking.js`, `autoplay-manager.js`: upstream fixes plus modern authenticated URLs; standard upstream autoplay behavior.
-- `src/lib/server-session-store.js`, `debug-log.js`, `src/global.js`: upstream session, logging, and global-window corrections.
-- `src/ui/sidebar/`: retain the personal playlist tab, items, search chip, and top-positioned Play All controls; integrate upstream UI fixes, modern headers, pagination, stale-request guards, and escaping.
-- `Info.json`, `package.json`, `pnpm-lock.yaml`, `.release-please-manifest.json`: upstream version/dependency updates, preserving fork identity.
-- `README.md`, `CHANGELOG.md`, `help.html`, `pref.html`: updated usage/release information; `docs/pr-preparation/` contains this audit and the three remaining draft bodies.
-- `tests/*.test.cjs` and `tests/helpers.cjs`: 13 passing regression tests on the combined fork. Run `node --test tests/*.test.cjs`.
+## Files and verification
 
-`pnpm run check` passed. IINA's bundled `iina-plugin pack .` produced a valid plugin archive. Test fixtures contain synthetic credentials only. Dependencies were installed with lifecycle scripts disabled.
+- `src/index.js`: updated upstream lifecycle/cache/title logic; retained native append, exact reporting scope, priority-10 legacy normalization, and priority-40 web resolution.
+- `src/lib/`: updated upstream resume, subtitle, session, autoplay, authentication, and title behavior; retained auth-url and web-url-resolver helpers and encoded token values.
+- `src/ui/sidebar/`: updated upstream login/season/debug behavior; retained playlist tab, search chip, paginated item views, escaped text, and Play All controls.
+- `Info.json`, `package.json`, `pnpm-lock.yaml`, `.release-please-manifest.json`: version/dependency/sidebar updates; test command now includes upstream JavaScript and personal CommonJS tests.
+- `tests/`: retained 72 upstream tests and 15 personal regressions, including web/title-hook integration. Duplicate older authentication tests were replaced by upstream's suite and focused legacy-link tests.
+- `README.md`, `CHANGELOG.md`, `help.html`, `pref.html`, `docs/pr-preparation/`: current usage, upstream release information, and rewritten PR drafts.
 
-## IINA loading
+The combined fork passes **87 tests** and lint/format checks. Each proposed branch also passed its full test suite. Dependencies were installed with lifecycle scripts disabled.
 
-Installed IINA: **1.4.4**. The existing development symlink correctly points from `~/Library/Application Support/com.colliderli.iina/plugins/iina-jellyfin.iinaplugin-dev` to `/Users/alego/IINA_Plugins/iina-jellyfin`.
+The development symlink still points from `~/Library/Application Support/com.colliderli.iina/plugins/iina-jellyfin.iinaplugin-dev` to `/Users/alego/IINA_Plugins/iina-jellyfin`. Restart IINA after the update to load the new JavaScript and sidebar metadata.
 
-No reinstall/copy is required after edits, but this is **not live hot-reloading**: restart IINA to reload JavaScript and metadata, as described in the [IINA development guide](https://docs.iina.io/pages/dev-guide.html). IINA was restarted during the follow-up Play All verification to ensure it loaded the current files.
-
-After restarting, check the playlist tab, Play All while another item is playing, an episode queue with autoplay enabled, and a saved-server web details link. Follow-up native verification reproduced the original one-item queue while the removed titled-queue implementation was still loaded in memory. After reloading, the current per-file append path produced only 74 of 80 entries; titles containing commas were interpreted as mpv options. Switching to IINA's native playlist API fixed this: the subscriptions playlist now shows all 80 entries after Play All, with playback left paused. This is not an end-to-end test of every entry or of episodic autoplay.
-
-## Alternative check
-
-For the requested full in-IINA browser, keeping this fork is the best fit among the projects inspected; no clearly superior drop-in replacement with verified Jellyfin 12 compatibility was established.
-
-- [IINA Jellyfin Companion](https://github.com/yxwyoyoyo/iina-jellyfin-companion) is intentionally smaller: subtitle loading, progress reporting, and ordered season queues, with no login or library browser. Its README still requires a legacy `api_key` download URL, so it is not established as a Jellyfin 12-default-compatible replacement.
-- [Jellyfin IINA Launcher](https://github.com/yxwyoyoyo/jellyfin-iina) adds an Open in IINA action on the server/web side. It complements a player plugin rather than replacing this sidebar.
-- [Jellyfin MPV Shim](https://github.com/jellyfin/jellyfin-mpv-shim) is an alternative client, not an IINA plugin. Its [API notes](https://github.com/jellyfin/jellyfin-mpv-shim/blob/master/docs/jellyfin-api-notes.md) explicitly discuss Jellyfin 12 authorization changes. It would be a change of workflow, not a drop-in upgrade.
-
-None of these alternatives was installed, and their end-to-end compatibility was not tested.
+Native queue behavior was verified during the earlier September fix. No new IINA GUI playback or live Jellyfin server probe was performed for this October update. The current build still needs a manual check of the playlist tab, Play All, direct web links, and progress/resume in IINA 1.5.

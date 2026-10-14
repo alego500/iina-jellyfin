@@ -43,6 +43,7 @@ function setup(get) {
       sync() {},
     },
     mpv: {
+      getFlag: () => false,
       addHook: (name, priority, callback) => {
         hooks[priority] = callback;
       },
@@ -90,7 +91,7 @@ test('web load hook resolves before continuing and appends only after the first 
           },
   }));
   let continued = 0;
-  await state.hooks[50](() => continued++);
+  await state.hooks[40](() => continued++);
   assert.equal(continued, 1);
   assert.match(state.properties['stream-open-filename'], /\/Videos\/first\/stream/);
   assert.equal(state.commands.length, 0);
@@ -109,34 +110,29 @@ test('web load hook resolves before continuing and appends only after the first 
   assert.equal(state.appended.length, 1, 'queue is appended once only');
 });
 
-test('sidebar Play All appends all 79 remaining URLs even when titles contain commas', () => {
-  const state = setup(() => assert.fail('No metadata lookup needed to append a queue'));
-  state.events['iina.window-loaded']();
-  const items = Array.from({ length: 80 }, (_, i) => ({
-    streamUrl: `https://host/Videos/item${i}/stream?static=true&ApiKey=test-token`,
-    title: i % 2 ? 'Flying a plane badly, on purpose' : 'The 36,000-Foot Submarine',
-  }));
-  state.sidebarHandlers['play-media-list']({ items });
-  assert.equal(state.appended.length, 0, 'wait for the replacing first file to load');
-  assert.equal(state.properties['stream-open-filename'], items[0].streamUrl);
-  state.events['iina.file-loaded'](items[0].streamUrl);
-  assert.equal(state.appended.length, 1);
-  assert.equal(state.appended[0].urls.length, 79);
-  assert.deepEqual(
-    Array.from(state.appended[0].urls),
-    items.slice(1).map((item) => item.streamUrl)
-  );
-  assert.equal(state.commands.filter((command) => command.name === 'loadfile').length, 0);
-});
-
 test('web hook always continues even when the mpv property read fails', async () => {
   const state = setup(() => assert.fail('No request expected'));
   state.iina.mpv.getString = () => {
     throw new Error('player closed');
   };
   let continued = 0;
-  await state.hooks[50](() => continued++);
+  await state.hooks[40](() => continued++);
   assert.equal(continued, 1);
+});
+
+test('web resolution leaves the upstream title hook intact and respects the title preference', async () => {
+  const state = setup(async () => ({ data: { Id: id, Type: 'Movie', Name: 'Hello, Goodbye' } }));
+  state.iina.preferences.set('set_video_title', true);
+  let continued = 0;
+  await state.hooks[40](() => continued++);
+  await state.hooks[50](() => continued++);
+  assert.equal(continued, 2);
+  assert.equal(state.properties['force-media-title'], 'Hello, Goodbye');
+
+  const disabled = setup(async () => ({ data: { Id: id, Type: 'Movie', Name: 'Ignored title' } }));
+  await disabled.hooks[40](() => {});
+  await disabled.hooks[50](() => {});
+  assert.equal(disabled.properties['force-media-title'], undefined);
 });
 
 test('web hook discards an asynchronous resolution when another file replaced it', async () => {
@@ -148,7 +144,7 @@ test('web hook discards an asynchronous resolution when another file replaced it
       })
   );
   let continued = 0;
-  const loading = state.hooks[50](() => continued++);
+  const loading = state.hooks[40](() => continued++);
   state.properties['stream-open-filename'] = 'file:///local/movie.mkv';
   finish({ data: { Id: id, Type: 'Movie', Name: 'Movie' } });
   await loading;

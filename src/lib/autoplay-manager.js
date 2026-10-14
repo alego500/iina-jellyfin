@@ -7,6 +7,7 @@ function createAutoplayManager({
   preferences,
   buildJellyfinHeaders,
   fetchItemMetadata,
+  mediaTitleOption,
   log,
 }) {
   let lastProcessedEpisodeId = null;
@@ -213,12 +214,11 @@ function createAutoplayManager({
         log('Could not clean playlist (non-critical)');
       }
 
-      mpv.command('loadfile', [
-        nextEpisode.playUrl,
-        'insert-next',
-        '-1',
-        `force-media-title=${episodeTitle}`,
-      ]);
+      const args = [nextEpisode.playUrl, 'insert-next'];
+      if (preferences.get('set_video_title')) {
+        args.push('-1', mediaTitleOption(episodeTitle));
+      }
+      mpv.command('loadfile', args);
 
       autoplayQueued = true;
 
@@ -300,11 +300,27 @@ function createAutoplayManager({
     })();
   }
 
-  function resetForNewFile(episodeId) {
-    if (!episodeId || lastProcessedEpisodeId !== episodeId) {
-      lastProcessedEpisodeId = null;
+  function hasEntryAfterCurrent() {
+    try {
+      const playlistCount = Number(mpv.getNumber('playlist-count') || 0);
+      const currentPos = Number(mpv.getNumber('playlist-pos'));
+      return Number.isFinite(currentPos) && currentPos >= 0 && playlistCount > currentPos + 1;
+    } catch {
+      return false;
     }
-    autoplayQueued = false;
+  }
+
+  function resetForNewFile(episodeId) {
+    // A repeated load of the same episode keeps the guard so the next episode
+    // is not queued twice, unless nothing is queued behind it any more (e.g.
+    // it was reopened, which clears the playlist) — then queue it again.
+    if (!episodeId || lastProcessedEpisodeId !== episodeId || !hasEntryAfterCurrent()) {
+      lastProcessedEpisodeId = null;
+      // Setup runs again and sets this once it has queued the next episode.
+      // While the guard holds, setup is skipped, so the episode queued behind
+      // this one must stay marked as queued for end-file to defer its stop.
+      autoplayQueued = false;
+    }
   }
 
   function clearQueuedFlag() {

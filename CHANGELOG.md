@@ -1,26 +1,59 @@
 # Changelog
 
-## [Unreleased]
+## [Unreleased — personal fork]
 
-### Compatibility and integration
+- Merge upstream v0.7.5 and preserve the personal plugin identity and saved settings.
+- Retain playlist browsing, complete paginated Play All queues, native IINA batch append, and saved-server web-link opening.
+- Keep legacy authenticated media links working through ApiKey normalization.
+- Adapt web-link resolution to run before upstream's title hook and use its title lifecycle.
+- Refresh separate local PR branches and draft descriptions for the remaining additions.
 
-- Fix Play All dropping entries whose titles contain commas: append URLs through IINA's native playlist API instead of parsing titles as mpv options. Verified the 80-item subscriptions playlist in IINA after restarting to load the current plugin.
-- Merge upstream v0.7.2 while preserving the personal plugin identifier and settings.
-- Use modern Jellyfin authentication for Jellyfin 12; normalize legacy authenticated media links before opening them.
-- Retain album/playlist queues and direct Jellyfin web-link opening, using upstream's deferred queue loading.
-- Remove the unsuccessful titled-queue implementation, temporary M3U generation, custom queue/autoplay overrides, and its local PR proposal. Restore upstream's normal per-item append behavior.
-- Add paginated playlist loading, escaped playlist text, and regression tests.
-- Keep the fork's exact server-base check for connected-account reporting; adopt upstream's session, lifecycle, stale-response, and security fixes.
-- Prepare local PR branches and draft descriptions without publishing them.
 
-### 🚀 Features
+## [0.7.5](https://github.com/mhajder/iina-jellyfin/compare/v0.7.4...v0.7.5) (2026-10-11)
 
-* **sidebar:** add Jellyfin playlist browsing and playlist item views
-* **playback:** queue album and playlist "Play All" actions in IINA
 
-### 📚 Documentation
+### 🐛 Bug Fixes
 
-* document playlist browsing and queue playback in README
+* give Jellyfin items their title before they load ([#123](https://github.com/mhajder/iina-jellyfin/issues/123)) ([56e8e3b](https://github.com/mhajder/iina-jellyfin/commit/56e8e3bcf494517f6eec9ddb0c42ff83864e0686))
+* keep resume points when nothing has played yet ([#117](https://github.com/mhajder/iina-jellyfin/issues/117)) ([a47a393](https://github.com/mhajder/iina-jellyfin/commit/a47a393046847fea784f967096906b14c18a69a2))
+* match one server across URL spellings ([#118](https://github.com/mhajder/iina-jellyfin/issues/118)) ([eecefd4](https://github.com/mhajder/iina-jellyfin/commit/eecefd4c71594127cc67864677413caeac46c23b))
+* **sidebar:** keep the season list in step with the series ([#119](https://github.com/mhajder/iina-jellyfin/issues/119)) ([fc9abe6](https://github.com/mhajder/iina-jellyfin/commit/fc9abe63b4690cda8f784416c8d021791261df18))
+
+
+### 🧹 Refactoring
+
+* share item requests per file and the browser handlers ([#120](https://github.com/mhajder/iina-jellyfin/issues/120)) ([2311e01](https://github.com/mhajder/iina-jellyfin/commit/2311e0197e1dab47770099a2081dc84732378d8f))
+
+## [0.7.4](https://github.com/mhajder/iina-jellyfin/compare/v0.7.3...v0.7.4) (2026-10-04)
+
+
+### 🐛 Bug Fixes
+
+* declare a sidebar tab so the browser opens in IINA 1.5 ([#105](https://github.com/mhajder/iina-jellyfin/issues/105)) ([322def0](https://github.com/mhajder/iina-jellyfin/commit/322def0af3baefdae52eda4df018632454d1e538))
+* drop late async results and stop titles leaking to later files ([#107](https://github.com/mhajder/iina-jellyfin/issues/107)) ([0c06ed0](https://github.com/mhajder/iina-jellyfin/commit/0c06ed09ee5b72d3118b5bef61202794afa3896a))
+* keep the sidebar's server state consistent across logins and switches ([#111](https://github.com/mhajder/iina-jellyfin/issues/111)) ([73c8756](https://github.com/mhajder/iina-jellyfin/commit/73c8756a593416f7d76a5ae31317cb19de73b55d))
+* make sidebar debug logging follow the preference ([#109](https://github.com/mhajder/iina-jellyfin/issues/109)) ([4e429b1](https://github.com/mhajder/iina-jellyfin/commit/4e429b1ce7ab9cb991e117ba6d1e02b4d1bad815))
+* match subtitle languages and Jellyfin URLs precisely ([#112](https://github.com/mhajder/iina-jellyfin/issues/112)) ([24472ac](https://github.com/mhajder/iina-jellyfin/commit/24472acda9f603db8d78fc4cb73202245ac315d9))
+* queue the next episode again when an episode is reopened ([#110](https://github.com/mhajder/iina-jellyfin/issues/110)) ([23cdef0](https://github.com/mhajder/iina-jellyfin/commit/23cdef0632263f24c86bc8471d1da4d5fb78f118))
+* stop a replaced item at its own position ([#108](https://github.com/mhajder/iina-jellyfin/issues/108)) ([eeef4d7](https://github.com/mhajder/iina-jellyfin/commit/eeef4d7a5e7d33e3a5bcfbf2ea632807cadc1705))
+
+
+### 🧹 Refactoring
+
+* drop the application-will-terminate handler IINA never fires ([#113](https://github.com/mhajder/iina-jellyfin/issues/113)) ([322146f](https://github.com/mhajder/iina-jellyfin/commit/322146f3ae7ffb3d9873eebfe7d780e50f6f8769))
+
+## [0.7.3](https://github.com/mhajder/iina-jellyfin/compare/v0.7.2...v0.7.3) (2026-09-16)
+
+
+### 🐛 Bug Fixes
+
+* support Jellyfin 12 authorization ([#94](https://github.com/mhajder/iina-jellyfin/issues/94)) ([2881473](https://github.com/mhajder/iina-jellyfin/commit/2881473c23dd4fc4523afdfb7db1cf1b2e74cc81))
+
+
+### 🧩 CI
+
+* run the test suite in prek ([#97](https://github.com/mhajder/iina-jellyfin/issues/97)) ([c77c151](https://github.com/mhajder/iina-jellyfin/commit/c77c151748ba4b125930ea45569e4e7803e188b7))
+* track pre-commit hook updates with dependabot ([#98](https://github.com/mhajder/iina-jellyfin/issues/98)) ([3cb5d5d](https://github.com/mhajder/iina-jellyfin/commit/3cb5d5dfb7b439683e6bd35e14063bf67b339e84))
 
 ## [0.7.2](https://github.com/mhajder/iina-jellyfin/compare/v0.7.1...v0.7.2) (2026-08-14)
 

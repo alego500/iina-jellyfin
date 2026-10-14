@@ -491,21 +491,21 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
 
       if (item.Type === 'Episode') {
         if (item.ImageTags && item.ImageTags.Primary) {
-          return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${encodeURIComponent(token)}`;
+          return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
         }
         if (item.SeriesId) {
-          return `${base}/Items/${item.SeriesId}/Images/Thumb?maxWidth=${maxWidth}&quality=90&ApiKey=${encodeURIComponent(token)}`;
+          return `${base}/Items/${item.SeriesId}/Images/Thumb?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
         }
       }
 
       if (item.ImageTags && item.ImageTags.Thumb) {
-        return `${base}/Items/${item.Id}/Images/Thumb?maxWidth=${maxWidth}&quality=90&ApiKey=${encodeURIComponent(token)}`;
+        return `${base}/Items/${item.Id}/Images/Thumb?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
       }
       if (item.ImageTags && item.ImageTags.Primary) {
-        return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${encodeURIComponent(token)}`;
+        return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
       }
       if (item.BackdropImageTags && item.BackdropImageTags.length > 0) {
-        return `${base}/Items/${item.Id}/Images/Backdrop?maxWidth=${maxWidth * 2}&quality=90&ApiKey=${encodeURIComponent(token)}`;
+        return `${base}/Items/${item.Id}/Images/Backdrop?maxWidth=${maxWidth * 2}&quality=90&ApiKey=${token}`;
       }
       return null;
     },
@@ -617,11 +617,11 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
         const base = this.currentServer.url;
         const token = this.currentServer.accessToken;
         if (hint.ThumbImageTag && hint.ThumbImageItemId) {
-          thumbUrl = `${base}/Items/${hint.ThumbImageItemId}/Images/Thumb?maxWidth=160&quality=90&ApiKey=${encodeURIComponent(token)}`;
+          thumbUrl = `${base}/Items/${hint.ThumbImageItemId}/Images/Thumb?maxWidth=160&quality=90&ApiKey=${token}`;
         } else if (hint.PrimaryImageTag) {
-          thumbUrl = `${base}/Items/${hint.ItemId}/Images/Primary?maxWidth=160&quality=90&ApiKey=${encodeURIComponent(token)}`;
+          thumbUrl = `${base}/Items/${hint.ItemId}/Images/Primary?maxWidth=160&quality=90&ApiKey=${token}`;
         } else if (hint.BackdropImageTag && hint.BackdropImageItemId) {
-          thumbUrl = `${base}/Items/${hint.BackdropImageItemId}/Images/Backdrop?maxWidth=320&quality=90&ApiKey=${encodeURIComponent(token)}`;
+          thumbUrl = `${base}/Items/${hint.BackdropImageItemId}/Images/Backdrop?maxWidth=320&quality=90&ApiKey=${token}`;
         }
       }
 
@@ -749,6 +749,13 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       this.selectedSeason = null;
       document.getElementById('playEpisodeBtn').disabled = true;
       document.getElementById('openEpisodeInJellyfinBtn').disabled = true;
+      // A slower response for a series viewed before this one must not fill
+      // the season list, and its episodes must not land under this series.
+      const requestId = this.nextRequestId('seasons');
+      this.nextRequestId('episodes');
+      // The previous series' seasons must not be pickable while these load.
+      document.getElementById('seasonSelect').innerHTML =
+        '<option value="">Loading seasons...</option>';
 
       try {
         const params = new URLSearchParams({
@@ -764,21 +771,30 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
           }
         );
 
+        if (!this.isLatestRequest('seasons', requestId)) return;
+
         const seasonSelect = document.getElementById('seasonSelect');
         seasonSelect.innerHTML = '<option value="">Select a season...</option>';
 
         if (response.data && response.data.Items) {
           response.data.Items.forEach((season) => {
-            if (season.IndexNumber !== undefined) {
-              const option = document.createElement('option');
-              option.value = season.Id;
-              option.textContent = `Season ${season.IndexNumber}`;
-              seasonSelect.appendChild(option);
-            }
+            // Jellyfin can send null for an unnumbered season. It is listed by
+            // name rather than as "Season null", and not hidden, or its
+            // episodes could not be reached at all.
+            const isNumbered = season.IndexNumber !== undefined && season.IndexNumber !== null;
+            const label = isNumbered ? `Season ${season.IndexNumber}` : season.Name;
+            if (!label) return;
+            const option = document.createElement('option');
+            option.value = season.Id;
+            option.textContent = label;
+            seasonSelect.appendChild(option);
           });
         }
       } catch (error) {
+        if (!this.isLatestRequest('seasons', requestId)) return;
         debugLog('Error loading seasons:', error);
+        document.getElementById('seasonSelect').innerHTML =
+          '<option value="">No seasons loaded</option>';
         document.getElementById('episodeList').innerHTML =
           '<div class="error">Failed to load seasons</div>';
       }
@@ -833,9 +849,9 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
               const base = this.currentServer.url;
               const token = this.currentServer.accessToken;
               if (episode.ImageTags && episode.ImageTags.Primary) {
-                episodeThumbUrl = `${base}/Items/${episode.Id}/Images/Primary?maxWidth=120&quality=90&ApiKey=${encodeURIComponent(token)}`;
+                episodeThumbUrl = `${base}/Items/${episode.Id}/Images/Primary?maxWidth=120&quality=90&ApiKey=${token}`;
               } else if (this.selectedItem && this.selectedItem.Id) {
-                episodeThumbUrl = `${base}/Items/${this.selectedItem.Id}/Images/Thumb?maxWidth=120&quality=90&ApiKey=${encodeURIComponent(token)}`;
+                episodeThumbUrl = `${base}/Items/${this.selectedItem.Id}/Images/Thumb?maxWidth=120&quality=90&ApiKey=${token}`;
               }
             }
 
@@ -1213,13 +1229,13 @@ window.createSidebarMediaMethods = function createSidebarMediaMethods(debugLog) 
       const token = this.currentServer.accessToken;
 
       if (item.ImageTags && item.ImageTags.Primary) {
-        return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${encodeURIComponent(token)}`;
+        return `${base}/Items/${item.Id}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
       }
       if (item.AlbumId) {
-        return `${base}/Items/${item.AlbumId}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${encodeURIComponent(token)}`;
+        return `${base}/Items/${item.AlbumId}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${token}`;
       }
       if (item.BackdropImageTags && item.BackdropImageTags.length > 0) {
-        return `${base}/Items/${item.Id}/Images/Backdrop?maxWidth=${maxWidth * 2}&quality=90&ApiKey=${encodeURIComponent(token)}`;
+        return `${base}/Items/${item.Id}/Images/Backdrop?maxWidth=${maxWidth * 2}&quality=90&ApiKey=${token}`;
       }
       return null;
     },

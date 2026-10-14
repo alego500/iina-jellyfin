@@ -45,8 +45,17 @@ repos:
         language: unsupported
         types_or: [javascript, css, json, yaml, html, markdown]
 
+      - id: local-test
+        name: node test
+        entry: pnpm test
+        require_serial: true
+        language: unsupported
+        files: ^(src|tests)/
+        types: [javascript]
+        pass_filenames: false
+
   - repo: https://github.com/commitizen-tools/commitizen
-    rev: v4.10.0
+    rev: v4.19.2
     hooks:
       - id: commitizen
       - id: commitizen-branch

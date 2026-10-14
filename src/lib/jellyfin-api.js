@@ -2,7 +2,13 @@
 
 const CLIENT_NAME = 'IINA Jellyfin Plugin by alego500';
 const DEVICE_NAME = 'IINA';
-const CLIENT_VERSION = '0.7.2'; // x-release-please-version
+const CLIENT_VERSION = '0.7.5'; // x-release-please-version
+
+const API_KEY_PARAM = /[?&](?:api_key|apikey|api-key|x-emby-token)=/i;
+const ITEM_ROUTE_ANY_CASE =
+  /\/(?:items|videos|audio)\/(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:[/?]|$)/i;
+const ITEM_ID_ROUTE_ANY_CASE =
+  /\/(?:items|videos|audio)\/([0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?=[/?]|$)/i;
 
 function createJellyfinApi({ http, preferences, log }) {
   function getDeviceId() {
@@ -85,8 +91,12 @@ function createJellyfinApi({ http, preferences, log }) {
 
       // Playback uses the streaming routes (/Videos/{id}/stream,
       // /Audio/{id}/stream); /Items/{id}/... is still accepted so links made by
-      // earlier versions, and Jellyfin download links, keep working.
-      const pathMatch = pathname.match(/\/(?:Items|Videos|Audio)\/([^/]+)/);
+      // earlier versions, and Jellyfin download links, keep working. Jellyfin
+      // routes are case-insensitive, but a lowercase route only counts with a
+      // GUID item id, as in isJellyfinUrl.
+      const pathMatch =
+        pathname.match(/\/(?:Items|Videos|Audio)\/([^/]+)/) ||
+        pathname.match(ITEM_ID_ROUTE_ANY_CASE);
       log(`Path match result: ${pathMatch ? pathMatch[0] : 'no match'}`);
 
       if (!pathMatch) {
@@ -137,12 +147,27 @@ function createJellyfinApi({ http, preferences, log }) {
       return false;
     }
 
+    // Lowercase routes count only with a Jellyfin item id (a GUID) and an api
+    // key: plain web links such as https://example.com/videos/clip.mp4, even
+    // signed CDN links carrying an api_key, are not Jellyfin media.
+    const hasApiKey = API_KEY_PARAM.test(url);
     return (
-      (url.includes('/Items/') && /[?&](?:api_key|apikey|api-key|x-emby-token)=/i.test(url)) ||
+      (url.includes('/Items/') && hasApiKey) ||
+      (ITEM_ROUTE_ANY_CASE.test(url) && hasApiKey) ||
       url.includes('jellyfin') ||
       url.includes('/Audio/') ||
       url.includes('/Videos/')
     );
+  }
+
+  /**
+   * IINA's http resolves for every status, so an error page would otherwise
+   * pass for data, and the per-file request cache would keep it for the file.
+   */
+  function throwOnErrorStatus(response) {
+    if (response.statusCode >= 400) {
+      throw new Error(`Jellyfin API returned status ${response.statusCode}`);
+    }
   }
 
   async function fetchPlaybackInfo(serverBase, itemId, apiKey) {
@@ -158,6 +183,7 @@ function createJellyfinApi({ http, preferences, log }) {
 
       log('Response received');
 
+      throwOnErrorStatus(response);
       if (!response.data) {
         throw new Error('No data received from Jellyfin API');
       }
@@ -192,6 +218,7 @@ function createJellyfinApi({ http, preferences, log }) {
 
       log('Metadata response received');
 
+      throwOnErrorStatus(response);
       if (!response.data) {
         throw new Error('No metadata received from Jellyfin API');
       }
@@ -232,6 +259,26 @@ function createJellyfinApi({ http, preferences, log }) {
   };
 }
 
+/**
+ * Compare two Jellyfin base URLs by host, port and path, ignoring the scheme,
+ * case and any trailing slash, so http/https of the same server still count
+ * as one server while two servers behind subpaths of one host (host/jf-a,
+ * host/jf-b) do not. Jellyfin matches its base URL without case, so
+ * /Jellyfin and /jellyfin are the same server.
+ */
+function isSameJellyfinServer(left, right) {
+  const baseOf = (url) =>
+    String(url || '')
+      .replace(/[?#].*$/, '')
+      .replace(/^https?:\/\//i, '')
+      .replace(/\/+$/, '')
+      .toLowerCase();
+
+  const leftBase = baseOf(left);
+  return leftBase.length > 0 && leftBase === baseOf(right);
+}
+
 module.exports = {
   createJellyfinApi,
+  isSameJellyfinServer,
 };

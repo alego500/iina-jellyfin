@@ -1,32 +1,23 @@
-# Draft: add Jellyfin playlist browsing and complete Play All queues
+# Draft: browse and play Jellyfin playlists from IINA
 
-Local only. Branch: `codex/pr-playlist-browser`. Base: `codex/pr-jellyfin-12-auth`.
+Branch: `codex/pr-playlist-browser`. Base: `codex/pr-native-queue-append` on upstream v0.7.5. Status: local, unpublished.
 
-## Changes
+## Result
 
-- Add a Playlists tab, playlist search chip, item details view, and Open in Jellyfin action.
-- Add Play All controls above playlist/album item lists and use upstream's `play-media-list` message flow.
-- Append the remaining URLs with IINA's native playlist API, avoiding dropped entries caused by commas in mpv title options.
-- Fetch every page of playlist listings and playlist contents in pages of 100 instead of silently truncating long playlists.
-- Preserve server order and duplicate entries; filter out folders/non-playable containers.
-- Use audio/video stream routes and descriptive music/movie/episode titles, including season 0.
-- Escape server-supplied playlist text and attributes; cancel stale results after navigation or server changes.
+Add a Playlists tab and search filter to the browser. Users can inspect a playlist's items, play an individual entry, open the playlist in Jellyfin, or use Play All to queue its complete contents in the current IINA window.
 
-## Upstream overlap
+Playlist listings and contents are fetched in pages of 100, preserving server order and duplicate entries. Folders and non-playable containers are excluded from playback. Album and playlist Play All share the existing playback message flow and native queue prerequisite; the controls sit above their item lists.
 
-Upstream already implements album Play All, deferred queue append, stale-request protection, HTML escaping, and correct streaming routes. This proposal builds on those changes rather than duplicating the old fork's opening/session workarounds.
+The feature follows upstream's request-ticket guards and HTML escaping, including when changing servers or navigating away. It includes descriptive item text and audio/video routes, including season 0.
 
 ## Validation
 
-- `pnpm run check`
-- `node --test tests/*.test.cjs` — 7 tests including prerequisites.
-- Native IINA verification: the subscriptions playlist now adds all 80 entries; the older per-file title option path added only 74. A regression test covers an 80-item list with comma-containing titles.
-- Tests cover pagination beyond 100 entries, duplicate ordering, a changed-server response, audio/video routing, season 0, and HTML escaping.
-- Read-only checks against Jellyfin 12 fetched the existing playlist's 80 entries. Pagination beyond one page is covered by synthetic fixtures, not by that live playlist.
+- `pnpm test`: 77 passing tests, including upstream's suite and pagination, duplicate order, changed-server responses, mixed media, season 0, escaping, and an 80-entry queue regression.
+- `pnpm run check`: lint and formatting pass.
+- Native queue behavior was verified during the earlier 80-item subscriptions playlist fix; the v0.7.5 GUI has not been retested in this session.
 
-## Manual checks before submission
+Manual follow-up: playlist search and navigation, empty/error states, long and mixed playlists, switching servers during loading, and Play All from both browser surfaces.
 
-- Playlist tab and search, open/back navigation, Open in Jellyfin, empty/error states.
-- Play All with no visible player, with a playing item, and from the standalone browser.
-- Long playlists, mixed media, unavailable media, and switching servers during loading.
-- Confirm queue order and normal playback in the native IINA playlist; these GUI checks remain outstanding.
+## Dependencies
+
+Review against the native queue branch so only playlist UI/library additions appear. The feature does not depend on web-link opening or legacy-link normalization. No personal branding or release metadata is included.
