@@ -3,6 +3,7 @@
  */
 
 const { createDebugLogger } = require('./lib/debug-log.js');
+const { createWebUrlResolver } = require('./lib/web-url-resolver.js');
 const { createJellyfinApi, isSameJellyfinServer } = require('./lib/jellyfin-api.js');
 const { createServerSessionStore } = require('./lib/server-session-store.js');
 const { createPlaybackTrackingManager } = require('./lib/playback-tracking.js');
@@ -181,6 +182,11 @@ const {
  * Handle file loaded event
  */
 function onFileLoaded(fileUrl) {
+  // IINA may report the original web URL after mpv opens the resolved stream.
+  if (resolvedWebLoad && mpv.getString('stream-open-filename') === resolvedWebLoad) {
+    fileUrl = resolvedWebLoad;
+  }
+  resolvedWebLoad = null;
   debugLog(`File loaded: ${fileUrl}`);
 
   // The first item of a queued list is playing now, so the rest can be added
@@ -545,7 +551,15 @@ function openInCurrentWindow(streamUrl, title) {
 
 // Items waiting to join the playlist behind the one currently being opened.
 let pendingPlaylistQueue = null;
+let resolvedWebLoad = null;
 const PENDING_QUEUE_TTL_MS = 60000;
+const webUrlResolver = createWebUrlResolver({
+  http,
+  buildJellyfinHeaders,
+  fetchItemMetadata,
+  loadStoredServers,
+  getStoredJellyfinSession,
+});
 
 /**
  * Append the items held back by handlePlayMediaList. Called once the first item
@@ -665,6 +679,28 @@ function handlePlayMedia(message) {
 }
 
 // Event handlers
+// Resolve web links before upstream's priority-50 title hook sees the stream.
+mpv.addHook('on_load', 40, async (next) => {
+  try {
+    const url = mpv.getString('stream-open-filename');
+    const items = await webUrlResolver.resolve(url);
+    if (!items || mpv.getString('stream-open-filename') !== url) return;
+    const [first, ...rest] = items;
+    clearQueuedFlag();
+    pendingPlaylistQueue = rest.length
+      ? { items: rest, at: Date.now(), itemId: first.itemId }
+      : null;
+    setTitleForNextItem(first.title, first.streamUrl);
+    mpv.set('stream-open-filename', first.streamUrl);
+    resolvedWebLoad = first.streamUrl;
+  } catch (error) {
+    debugLog('Could not resolve Jellyfin web link: ' + error.message);
+    core.osd('Could not open Jellyfin link; check the saved server login');
+  } finally {
+    next();
+  }
+});
+
 event.on('iina.file-loaded', onFileLoaded);
 
 // Holds the load until the Jellyfin title is set, so the playlist entry gets
