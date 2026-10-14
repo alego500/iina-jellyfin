@@ -153,6 +153,7 @@ Click the "Filter/Sort" button in the Movies or TV Series tab header to toggle t
 
 The plugin automatically detects and processes Jellyfin URLs in these formats:
 
+- Jellyfin web details links: `https://server/web/#/details?id={ItemId}` and `https://server/web/index.html#!/details?id={ItemId}`. Sign in to that exact server in the plugin first. Movie, episode, audio, and playlist links are resolved before playback; playlist entries are appended in server order. Reverse proxy paths such as `/jellyfin/web/` are supported.
 - Download URLs: `http://server:port/Items/{ItemId}/Download?ApiKey={key}` _(automatically stores credentials for sidebar login)_
 - URLs containing `/Items/` and `ApiKey=` _(automatically stores credentials for sidebar login)_
 - URLs containing "jellyfin", "/Audio/", or "/Videos/"
