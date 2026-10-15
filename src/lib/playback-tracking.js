@@ -21,9 +21,9 @@ function createPlaybackTrackingManager({
   // the beginning. Only after a position above 0 has been seen is 0 a real
   // playback position worth reporting.
   let hasStartedPlayback = false;
-  // Set when mpv ended the tracked file but the stop is deferred until the next
-  // file loads. core.status then describes the next file, so its position must
-  // not be read for this one.
+  // Set when mpv ended the tracked file. core.status may already have reset
+  // to 0 or describe the next file, so its position must not be read for this
+  // one, even when the stop report is sent immediately.
   let trackedFileEnded = false;
   let playbackTickCount = 0;
   let playbackTickTimer = null;
@@ -538,9 +538,8 @@ function createPlaybackTrackingManager({
   }
 
   /**
-   * The tracked file ended but its stop report waits for the next file. Freeze
-   * the last sampled position so the tick cannot overwrite it with the next
-   * file's.
+   * Freeze the last sampled position when the tracked file ends, before an
+   * immediate or deferred stop can read a reset position or the next file's.
    */
   function markTrackedFileEnded() {
     if (!currentPlaybackSession) return;
