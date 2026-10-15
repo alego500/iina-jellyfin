@@ -3,9 +3,9 @@ import vm from 'node:vm';
 
 // The plugin's lib files are CommonJS run by IINA, but package.json sets
 // "type": "module", so Node cannot require them directly.
-export function loadCommonJs(file) {
+export function loadCommonJs(file, globals = {}) {
   const module = { exports: {} };
-  const context = vm.createContext({ module, exports: module.exports, URL });
+  const context = vm.createContext({ module, exports: module.exports, URL, ...globals });
   vm.runInContext(readFileSync(file, 'utf8'), context, { filename: file });
   return module.exports;
 }
