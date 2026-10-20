@@ -140,6 +140,14 @@ const {
   secondsToTicks,
   ticksToSeconds,
   log: debugLog,
+  getPlaybackIdentity() {
+    if (typeof mpv.getNumber !== 'function') return null;
+    const index = mpv.getNumber('playlist-pos');
+    if (!Number.isFinite(index) || index < 0) return null;
+    // mpv's entry ID survives reordering and distinguishes duplicate URLs.
+    const id = mpv.getNumber(`playlist/${index}/id`);
+    return Number.isFinite(id) ? id : null;
+  },
 });
 
 const { setupAutoplayForEpisode, resetForNewFile, clearQueuedFlag, isQueued } =
@@ -671,6 +679,16 @@ function handlePlayMedia(message) {
 }
 
 // Event handlers
+// Native playlist buttons/media keys can reset position and emit pause.changed
+// before end-file. Freeze the outgoing sample before any incoming load work.
+mpv.addHook('on_load', 5, async (next) => {
+  try {
+    markTrackedFileEnded();
+  } finally {
+    next();
+  }
+});
+
 event.on('iina.file-loaded', onFileLoaded);
 
 // Holds the load until the Jellyfin title is set, so the playlist entry gets
@@ -694,6 +712,9 @@ event.on('mpv.pause.changed', handlePauseChange);
 
 // Handle file ending (includes both natural end and replacement)
 event.on('mpv.end-file', () => {
+  // IINA may already expose position 0 here. Freeze the outgoing file's last
+  // sample before stopping it, including manual playlist Next/Previous.
+  markTrackedFileEnded();
   invalidatePendingResults();
   forgetItemRequests();
   const queuedForAutoplay = isQueued();
@@ -707,13 +728,11 @@ event.on('mpv.end-file', () => {
   if (isReplacingPlayback) {
     // File is being replaced (e.g. episode transition) — don't send stop report
     debugLog('File replacement in progress, skipping stop report');
-    markTrackedFileEnded();
     return;
   }
   if (queuedForAutoplay) {
     // Next episode is queued via insert-next — mpv will auto-advance
     debugLog('Autoplay queued, mpv will play next episode — skipping stop cleanup');
-    markTrackedFileEnded();
     // Reset for the next cycle (setupAutoplayForEpisode will re-set these)
     clearQueuedFlag();
     return;
