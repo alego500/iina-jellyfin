@@ -140,6 +140,14 @@ const {
   secondsToTicks,
   ticksToSeconds,
   log: debugLog,
+  getPlaybackIdentity() {
+    if (typeof mpv.getNumber !== 'function') return null;
+    const index = mpv.getNumber('playlist-pos');
+    if (!Number.isFinite(index) || index < 0) return null;
+    // mpv's entry ID survives reordering and distinguishes duplicate URLs.
+    const id = mpv.getNumber(`playlist/${index}/id`);
+    return Number.isFinite(id) ? id : null;
+  },
 });
 
 const { setupAutoplayForEpisode, resetForNewFile, clearQueuedFlag, isQueued } =
@@ -671,6 +679,16 @@ function handlePlayMedia(message) {
 }
 
 // Event handlers
+// Native playlist buttons/media keys can reset position and emit pause.changed
+// before end-file. Freeze the outgoing sample before any incoming load work.
+mpv.addHook('on_load', 5, async (next) => {
+  try {
+    markTrackedFileEnded();
+  } finally {
+    next();
+  }
+});
+
 event.on('iina.file-loaded', onFileLoaded);
 
 // Holds the load until the Jellyfin title is set, so the playlist entry gets

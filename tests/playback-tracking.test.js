@@ -45,6 +45,7 @@ test('a replaced item is stopped at its own position, not the next file', async 
   const { tracker, status, requests, tick } = createTracker();
 
   await tracker.startPlaybackTracking('https://jf.example', 'itemA', 'key');
+  await flush();
   status.position = 2400;
   tick();
 
@@ -62,6 +63,7 @@ test('a pause change after the file ended does not overwrite its position', asyn
   const { tracker, status, requests, tick } = createTracker();
 
   await tracker.startPlaybackTracking('https://jf.example', 'itemA', 'key');
+  await flush();
   status.position = 2400;
   tick();
 
@@ -94,6 +96,7 @@ test('progress after playback starts reports the real position, including a rewi
   const { tracker, status, requests, tick } = createTracker();
 
   await tracker.startPlaybackTracking('https://jf.example', 'itemA', 'key');
+  await flush();
   status.position = 30;
   tick();
   status.position = 0;
@@ -139,6 +142,23 @@ test('stopping without playback reports the stored position back', async () => {
   const stop = requests.find((request) => request.url.includes('/Sessions/Playing/Stopped'));
   assert.equal(stop.data.Failed, false);
   assert.equal(stop.data.PositionTicks, 1200 * 10000000);
+});
+
+test('a slow resume lookup cannot report early playback as real progress', async () => {
+  let resolveMetadata;
+  const { tracker, status, requests, tick } = createTracker({
+    fetchItemMetadata: () => new Promise((resolve) => (resolveMetadata = resolve)),
+  });
+  await tracker.startPlaybackTracking('https://jf.example', 'itemA', 'key');
+  await flush();
+  status.position = 1.04;
+  for (let n = 0; n < 10; n++) tick();
+  tracker.handlePauseChange();
+  assert.equal(requests.filter(({ url }) => url.includes('/Progress')).length, 0);
+  tracker.stopPlaybackTracking();
+  assert.equal(requests.find(({ url }) => url.includes('/Stopped')).data.Failed, true);
+  resolveMetadata({ UserData: { PlaybackPositionTicks: 1200 * 10000000 } });
+  await flush();
 });
 
 test('reopening an item reads its resume point after the stop report landed', async () => {

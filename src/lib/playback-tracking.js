@@ -10,6 +10,7 @@ function createPlaybackTrackingManager({
   secondsToTicks,
   ticksToSeconds,
   log,
+  getPlaybackIdentity = () => null,
 }) {
   let currentPlaybackSession = null;
   // Bumped by every start and stop so an in-flight startPlaybackTracking can
@@ -21,9 +22,9 @@ function createPlaybackTrackingManager({
   // the beginning. Only after a position above 0 has been seen is 0 a real
   // playback position worth reporting.
   let hasStartedPlayback = false;
-  // Set when mpv ended the tracked file. core.status may already have reset
-  // to 0 or describe the next file, so its position must not be read for this
-  // one, even when the stop report is sent immediately.
+  // Set when the tracked entry is being replaced or has ended. core.status
+  // may already have reset to 0 or describe the next file, so its position
+  // must not be read for this one, even for an immediate stop report.
   let trackedFileEnded = false;
   let playbackTickCount = 0;
   let playbackTickTimer = null;
@@ -51,10 +52,24 @@ function createPlaybackTrackingManager({
    * Current playback position, or null when it carries no information yet.
    */
   function samplePosition() {
+    if (trackedFileEnded || !isCurrentFile()) return null;
     const position = core.status.position;
 
     if (position === null || position === undefined || position < 0) {
       return null;
+    }
+
+    const session = currentPlaybackSession;
+    if (session && session.resumePending) {
+      // seekTo queues an asynchronous seek. Do not treat the first second of
+      // the new file as progress until status confirms the saved position.
+      if (
+        !session.resumeSeekIssued ||
+        position < session.resumePosition - RESUME_SEEK_TOLERANCE_SECONDS
+      ) {
+        return null;
+      }
+      session.resumePending = false;
     }
 
     if (position > 0) {
@@ -65,6 +80,11 @@ function createPlaybackTrackingManager({
     return hasStartedPlayback ? 0 : null;
   }
 
+  function isCurrentFile() {
+    const identity = currentPlaybackSession && currentPlaybackSession.playbackIdentity;
+    return identity === null || identity === undefined || getPlaybackIdentity() === identity;
+  }
+
   /**
    * The position a progress report should carry. Until playback has started
    * the sampled 0 says nothing, and Jellyfin saves every reported position as
@@ -72,6 +92,7 @@ function createPlaybackTrackingManager({
    * instead, or nothing while that is not known yet.
    */
   function reportablePosition() {
+    if (currentPlaybackSession.resumePending) return null;
     if (hasStartedPlayback) return lastKnownPosition;
     return currentPlaybackSession.resumePosition ?? null;
   }
@@ -79,6 +100,8 @@ function createPlaybackTrackingManager({
   const PLAYBACK_TICK_INTERVAL = 1000;
   const PROGRESS_REPORT_TICKS = 10;
   const WATCHED_THRESHOLD = 0.95;
+  // Allow minor keyframe rounding when confirming IINA's asynchronous seek.
+  const RESUME_SEEK_TOLERANCE_SECONDS = 2;
 
   async function fetchResumePosition(serverBase, itemId, apiKey) {
     try {
@@ -136,23 +159,25 @@ function createPlaybackTrackingManager({
       }
 
       if (resumePosition === null || resumePosition < 15) {
+        if (session) session.resumePending = false;
         log('No significant resume position, starting from beginning');
         return;
       }
 
-      if (currentPlaybackSession !== session) {
+      if (currentPlaybackSession !== session || !isCurrentFile()) {
         log(`Playback session changed while fetching resume position for ${itemId}, not seeking`);
         return;
       }
 
       setTimeout(() => {
         try {
-          if (currentPlaybackSession !== session) {
+          if (currentPlaybackSession !== session || !isCurrentFile()) {
             log(`Playback session changed before resume seek for ${itemId}, not seeking`);
             return;
           }
 
           log(`Resuming playback at ${resumePosition.toFixed(1)}s`);
+          session.resumeSeekIssued = true;
           core.seekTo(resumePosition);
 
           if (preferences.get('show_notifications')) {
@@ -356,6 +381,7 @@ function createPlaybackTrackingManager({
     log(`Starting playback tracking for item: ${itemId}`);
 
     const requestId = ++sessionRequestCounter;
+    const playbackIdentity = getPlaybackIdentity();
 
     let playSessionId = null;
     let mediaSourceId = null;
@@ -372,7 +398,10 @@ function createPlaybackTrackingManager({
       log(`Could not fetch playback info for session: ${error.message}`);
     }
 
-    if (requestId !== sessionRequestCounter) {
+    if (
+      requestId !== sessionRequestCounter ||
+      (playbackIdentity !== null && getPlaybackIdentity() !== playbackIdentity)
+    ) {
       // Another file was loaded (or playback stopped) while the playback info
       // request was in flight — installing this session now would report
       // progress for the wrong item.
@@ -388,6 +417,9 @@ function createPlaybackTrackingManager({
       mediaSourceId,
       startTime: Date.now(),
       resumePosition: null,
+      resumePending: true,
+      resumeSeekIssued: false,
+      playbackIdentity,
       duration: null,
       hasReportedWatched: false,
     };
@@ -415,7 +447,8 @@ function createPlaybackTrackingManager({
     playbackTickCount = 0;
 
     playbackTickTimer = setInterval(() => {
-      if (!currentPlaybackSession) {
+      if (!isCurrentFile()) markTrackedFileEnded();
+      if (!currentPlaybackSession || trackedFileEnded) {
         stopPlaybackTick();
         return;
       }
@@ -501,6 +534,7 @@ function createPlaybackTrackingManager({
   }
 
   function handlePauseChange() {
+    if (!isCurrentFile()) markTrackedFileEnded();
     // After the tracked file ended, core.status describes the next file.
     if (!currentPlaybackSession || trackedFileEnded) return;
 
@@ -542,6 +576,8 @@ function createPlaybackTrackingManager({
    * immediate or deferred stop can read a reset position or the next file's.
    */
   function markTrackedFileEnded() {
+    // An incoming load also invalidates a start still waiting for playback info.
+    sessionRequestCounter++;
     if (!currentPlaybackSession) return;
 
     trackedFileEnded = true;

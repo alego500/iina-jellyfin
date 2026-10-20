@@ -11,8 +11,9 @@ const flush = async () => {
 
 // Load the real entry point as well as the tracking module: tracker-only tests
 // cannot catch a missing markTrackedFileEnded call in the end-file handler.
-function setup() {
+function setup({ asyncSeek = false } = {}) {
   const events = {};
+  const hooks = {};
   const intervals = new Map();
   const timeouts = new Map();
   let timerId = 0;
@@ -22,7 +23,9 @@ function setup() {
   ]);
   const stops = [];
   const seeks = [];
-  const properties = {};
+  const progress = [];
+  let pendingSeek;
+  const properties = { 'playlist-pos': 0, 'playlist/0/id': 100, 'playlist/1/id': 101 };
   const status = { position: 0, duration: 3600, paused: false };
   const timers = {
     setInterval(callback) {
@@ -42,7 +45,8 @@ function setup() {
       osd() {},
       seekTo(position) {
         seeks.push(position);
-        status.position = position;
+        pendingSeek = position;
+        if (!asyncSeek) status.position = position;
       },
     },
     console,
@@ -62,6 +66,10 @@ function setup() {
         };
       },
       async post(url, { data }) {
+        if (url.includes('/Progress')) {
+          progress.push(data);
+          saved.set(data.ItemId, data.PositionTicks / ticksPerSecond);
+        }
         if (url.includes('/Stopped')) {
           stops.push(data);
           if (!data.Failed) saved.set(data.ItemId, data.PositionTicks / ticksPerSecond);
@@ -72,7 +80,8 @@ function setup() {
     utils: { resolvePath: (path) => path },
     preferences: { get: (key) => key === 'sync_playback_progress', set() {}, sync() {} },
     mpv: {
-      addHook() {},
+      getNumber: (key) => properties[key],
+      addHook: (name, priority, callback) => (hooks[priority] = callback),
       getString: (key) => properties[key],
       set: (key, value) => (properties[key] = value),
     },
@@ -85,35 +94,68 @@ function setup() {
     require: (path) => loadCommonJs('src/' + path.slice(2), timers),
   });
 
+  function runResumeSeek() {
+    for (const [id, timer] of [...timeouts]) {
+      if (timer.delay === 1000) {
+        timeouts.delete(id);
+        timer.callback();
+      }
+    }
+    for (const callback of [...intervals.values()]) callback();
+  }
+
   return {
     saved,
     stops,
     seeks,
+    progress,
+    runResumeSeek,
     async load(id, resume = true) {
+      properties['playlist-pos'] = id === itemA ? 0 : 1;
       status.position = 0;
       const url = `https://host/Videos/${id}/stream?ApiKey=test-token`;
       properties['stream-open-filename'] = url;
       events['iina.file-loaded'](url);
       await flush();
       if (resume) {
-        for (const [id, timer] of [...timeouts]) {
-          if (timer.delay === 1000) {
-            timeouts.delete(id);
-            timer.callback();
-          }
-        }
+        runResumeSeek();
       }
     },
     sample(position) {
       status.position = position;
       for (const callback of [...intervals.values()]) callback();
     },
-    end() {
+    pause(position) {
+      status.position = position;
+      status.paused = true;
+      events['mpv.pause.changed']();
+    },
+    applySeek() {
+      status.position = pendingSeek;
+      for (const callback of [...intervals.values()]) callback();
+    },
+    moveCurrentEntry() {
+      [properties['playlist/0/id'], properties['playlist/1/id']] = [
+        properties['playlist/1/id'],
+        properties['playlist/0/id'],
+      ];
+      properties['playlist-pos'] = 1 - properties['playlist-pos'];
+    },
+    end({ pauseFirst = false, transition = false, hookAfterPause = false } = {}) {
+      if (transition) properties['playlist-pos'] = 1 - properties['playlist-pos'];
+      // on_load precedes the reset/pause events on native Next/Previous.
+      if (transition && !hookAfterPause && hooks[5]) {
+        let continued = false;
+        hooks[5](() => (continued = true));
+        assert.ok(continued, 'the transition hook must release the load');
+      }
       // This is the observed IINA ordering on manual Next/Previous: core has
       // reset before the plugin receives end-file, not a deliberate rewind.
       status.position = 0;
+      if (pauseFirst) events['mpv.pause.changed']();
+      if (transition && hookAfterPause && hooks[5]) hooks[5](() => {});
       events['mpv.end-file']();
-      events['mpv.pause.changed']();
+      if (!pauseFirst) events['mpv.pause.changed']();
       assert.equal(intervals.size, 0, 'the ended file must no longer be sampled');
     },
   };
@@ -162,4 +204,64 @@ test('leaving an item before its resume seek preserves the existing saved positi
   state.end();
   assert.equal(state.saved.get(itemA), 180.714);
   assert.equal(state.stops[0].Failed, false);
+});
+
+test('native Next/Previous freezes progress before the reset pause event, not only end-file', async () => {
+  const state = setup();
+  await state.load(itemA);
+  for (const position of [187, 194]) {
+    state.sample(position);
+    state.end({ transition: true, pauseFirst: true });
+    assert.equal(state.saved.get(itemA), position);
+    await state.load(itemB);
+    state.sample(65);
+    state.end({ transition: true, pauseFirst: true });
+    assert.equal(state.saved.get(itemB), 65);
+    await state.load(itemA);
+    assert.equal(state.seeks.at(-1), position);
+  }
+  assert.equal(state.progress.length, 0, 'reset pause events must not send zero progress');
+});
+
+test('tiny positive positions before the resume seek cannot overwrite saved progress', async () => {
+  const state = setup();
+  await state.load(itemA, false);
+  state.pause(0.08);
+  for (let n = 0; n < 10; n++) state.sample(1.04);
+  assert.equal(state.progress.length, 0);
+  state.end();
+  assert.equal(state.saved.get(itemA), 180.714);
+});
+
+test('a changed playlist entry protects the outgoing position even before the load hook', async () => {
+  const state = setup();
+  await state.load(itemA);
+  state.sample(187);
+  state.end({ transition: true, pauseFirst: true, hookAfterPause: true });
+  assert.equal(state.saved.get(itemA), 187);
+  assert.equal(state.progress.length, 0);
+});
+
+test('resume stays protected until the asynchronous seek is observed in player status', async () => {
+  const state = setup({ asyncSeek: true });
+  await state.load(itemA, false);
+  state.runResumeSeek();
+  state.pause(1.04);
+  for (let n = 0; n < 10; n++) state.sample(1.04);
+  assert.equal(state.progress.length, 0, 'calling seekTo is not proof that it has finished');
+  state.applySeek();
+  state.pause(180.714);
+  assert.equal(state.progress.at(-1).PositionTicks, 180.714 * ticksPerSecond);
+  state.sample(0);
+  state.pause(0);
+  assert.equal(state.saved.get(itemA), 0, 'a genuine rewind after resume still works');
+});
+
+test('reordering the playing entry does not freeze its progress', async () => {
+  const state = setup();
+  await state.load(itemA);
+  state.sample(187);
+  state.moveCurrentEntry();
+  state.pause(194);
+  assert.equal(state.saved.get(itemA), 194, 'the stable entry ID survives a new playlist index');
 });
