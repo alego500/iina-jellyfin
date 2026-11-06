@@ -84,11 +84,11 @@ test('browser playback announces the known title once and suppresses the older a
   state.handlers['play-media']({ streamUrl: stream(itemA), title: 'Movie A' });
   await state.hooks[50](() => {});
   state.events['iina.file-loaded'](stream(itemA));
-  assert.ok(state.messages.includes('Playing: Movie A'), 'show immediately after load');
+  assert.ok(state.messages.includes('Movie A'), 'show immediately after load');
   await flush();
   assert.deepEqual(
-    state.messages.filter((message) => /^(Playing|Title):/.test(message)),
-    ['Playing: Movie A']
+    state.messages.filter((message) => message === 'Movie A' || /^Title:/.test(message)),
+    ['Movie A']
   );
 });
 
@@ -97,7 +97,7 @@ test('a direct Jellyfin stream announces its preloaded metadata title', async ()
   await state.hooks[50](() => {});
   state.events['iina.file-loaded'](stream(itemA));
   await flush();
-  assert.deepEqual(state.messages, ['Playing: Movie A']);
+  assert.deepEqual(state.messages, ['Movie A']);
   assert.equal(state.requests.length, 1, 'reuse the title hook metadata request');
 });
 
@@ -108,7 +108,7 @@ test('a delayed title is announced after metadata arrives, without echoing the U
   assert.deepEqual(state.messages, []);
   finish({ Name: 'Late movie' });
   await flush();
-  assert.deepEqual(state.messages, ['Playing: Late movie']);
+  assert.deepEqual(state.messages, ['Late movie']);
 });
 
 test('an incoming load or end-file cancels an outgoing delayed title message', async () => {
@@ -138,6 +138,6 @@ test('the title OSD can use an existing media title without enabling metadata ti
   state.properties['force-media-title'] = 'Embedded title';
   state.events['iina.file-loaded'](stream(itemA));
   await flush();
-  assert.deepEqual(state.messages, ['Playing: Embedded title']);
+  assert.deepEqual(state.messages, ['Embedded title']);
   assert.deepEqual(state.requests, []);
 });

@@ -215,31 +215,31 @@ test('leaving an item before its resume seek preserves the existing saved positi
 test('the title is restored once only after the actual asynchronous Jellyfin resume finishes', async () => {
   const state = setup({ asyncSeek: true, titleOsd: true, showNotifications: true });
   await state.load(itemA, false);
-  assert.deepEqual(state.messages, ['Playing: Movie A']);
+  assert.deepEqual(state.messages, ['Movie A']);
   state.playbackRestart();
   state.runResumeSeek();
   assert.equal(state.seeks.at(-1), 180.714);
   state.playbackRestart();
   assert.equal(
-    state.messages.filter((message) => message.startsWith('Playing:')).length,
+    state.messages.filter((message) => message === 'Movie A').length,
     1,
     'issuing a seek or a premature playback-restart must not announce completion'
   );
 
   state.applySeek();
   assert.equal(
-    state.messages.filter((message) => message.startsWith('Playing:')).length,
+    state.messages.filter((message) => message === 'Movie A').length,
     1,
     'sampling the position alone is not a completed-seek event'
   );
   state.messages.push('Native seek OSD');
   state.pause(179.5); // keyframe rounding within the existing two-second tolerance
   state.playbackRestart();
-  assert.equal(state.messages.at(-1), 'Playing: Movie A');
+  assert.equal(state.messages.at(-1), 'Movie A');
   state.playbackRestart();
   state.sample(500); // a later manual seek must not repeat the title again
   state.playbackRestart();
-  assert.equal(state.messages.filter((message) => message.startsWith('Playing:')).length, 2);
+  assert.equal(state.messages.filter((message) => message === 'Movie A').length, 2);
 });
 
 test('no resume, insignificant saved progress and watched items do not cause a second title', async () => {
@@ -255,7 +255,7 @@ test('no resume, insignificant saved progress and watched items do not cause a s
     state.sample(240); // ordinary manual seek
     state.playbackRestart();
     assert.deepEqual(state.seeks, []);
-    assert.deepEqual(state.messages, ['Playing: Movie A']);
+    assert.deepEqual(state.messages, ['Movie A']);
   }
 });
 
@@ -267,7 +267,7 @@ test('an incoming playlist entry cannot receive the previous item resume title',
   await state.load(itemB, false);
   state.applySeek(); // completion of the old asynchronous seek
   state.playbackRestart();
-  assert.deepEqual(state.messages, ['Playing: Movie A', 'Playing: Movie B']);
+  assert.deepEqual(state.messages, ['Movie A', 'Movie B']);
 });
 
 test('disabling the title toggle before resume completion suppresses the extra message', async () => {
@@ -279,7 +279,7 @@ test('disabling the title toggle before resume completion suppresses the extra m
   state.playbackRestart();
   state.values.show_playback_title_osd = true;
   state.playbackRestart();
-  assert.deepEqual(state.messages, ['Playing: Movie A']);
+  assert.deepEqual(state.messages, ['Movie A']);
 });
 
 test('a failed resume seek never arms a second title notification', async () => {
@@ -288,7 +288,7 @@ test('a failed resume seek never arms a second title notification', async () => 
   state.sample(180.714);
   state.playbackRestart();
   assert.deepEqual(state.seeks, []);
-  assert.deepEqual(state.messages, ['Playing: Movie A']);
+  assert.deepEqual(state.messages, ['Movie A']);
 });
 
 test('a changed playing entry suppresses resume completion even before end-file arrives', async () => {
@@ -298,7 +298,7 @@ test('a changed playing entry suppresses resume completion even before end-file 
   state.applySeek();
   state.changePlayingEntry();
   state.playbackRestart();
-  assert.deepEqual(state.messages, ['Playing: Movie A']);
+  assert.deepEqual(state.messages, ['Movie A']);
 });
 
 test('reordering the same playing entry still allows its resume title', async () => {
@@ -308,7 +308,7 @@ test('reordering the same playing entry still allows its resume title', async ()
   state.moveCurrentEntry();
   state.applySeek();
   state.playbackRestart();
-  assert.deepEqual(state.messages, ['Playing: Movie A', 'Playing: Movie A']);
+  assert.deepEqual(state.messages, ['Movie A', 'Movie A']);
 });
 
 test('disabled progress sync does not request a resume or display a second title', async () => {
@@ -318,5 +318,5 @@ test('disabled progress sync does not request a resume or display a second title
   state.sample(180.714);
   state.playbackRestart();
   assert.deepEqual(state.seeks, []);
-  assert.deepEqual(state.messages, ['Playing: Movie A']);
+  assert.deepEqual(state.messages, ['Movie A']);
 });

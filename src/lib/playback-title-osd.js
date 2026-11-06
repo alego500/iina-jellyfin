@@ -31,7 +31,7 @@ function createPlaybackTitleOsd({ core, preferences, log }) {
         if (typeof title !== 'string' || !title.trim() || /^https?:\/\//i.test(title.trim())) {
           return;
         }
-        core.osd(`Playing: ${title}`);
+        core.osd(title);
         shown = true;
         if (resumed) shownAfterResume = true;
       } catch (error) {

@@ -45,7 +45,7 @@ Use sanitized URLs and remove credentials from report attachments. No token or a
 
 The plugin now adds **Show playback title when opening Jellyfin media** under **Notifications & UI**. Its preference key is `show_playback_title_osd`, with a default of `true`.
 
-- After a Jellyfin file loads, read `core.status.title` and display `Playing: <title>` if the title is already usable.
+- After a Jellyfin file loads, read `core.status.title` and display the title alone, without a `Playing:` prefix, if the title is already usable.
 - If the existing metadata-title update is still pending, retry the same guarded callback when that update finishes. The OSD helper makes no extra HTTP requests or load delay.
 - If the playback tracker requests an automatic Jellyfin resume, arm one post-resume notification after `core.seekTo()` succeeds. Handle `mpv.playback-restart` and verify that the same playlist entry is still active and the reported position is within two seconds of the saved target before sending that notification.
 - Consume the pending completion flag before notifying, so duplicate restart events and later manual seeks cannot trigger additional messages. Drop delayed callbacks when a file ends or another file loads.

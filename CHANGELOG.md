@@ -2,7 +2,7 @@
 
 ## [Unreleased — personal fork]
 
-- Add an enabled-by-default playback-title OSD toggle under Notifications & UI, showing the resolved Jellyfin title when ready and once again after a confirmed automatic resume seek, without polling timers or changes to IINA's global OSD preferences.
+- Add an enabled-by-default playback-title OSD toggle under Notifications & UI, showing the resolved Jellyfin title without a "Playing:" prefix when ready and once again after a confirmed automatic resume seek, without polling timers or changes to IINA's global OSD preferences.
 - Preserve Jellyfin resume positions during repeated manual playlist Next/Previous navigation instead of reporting IINA's reset position of zero.
 - Merge upstream v0.7.5 and preserve the personal plugin identity and saved settings.
 - Retain playlist browsing, complete paginated Play All queues, native IINA batch append, and saved-server web-link opening.

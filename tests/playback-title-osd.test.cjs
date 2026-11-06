@@ -29,7 +29,7 @@ test('a ready title is announced once without timers or duplicate metadata messa
   const ready = state.manager.beginFile(true);
   ready();
   ready();
-  assert.deepEqual(state.messages, ['Playing: Movie, æøå 🎬']);
+  assert.deepEqual(state.messages, ['Movie, æøå 🎬']);
 });
 
 test('completed resume allows exactly one more title announcement', () => {
@@ -39,11 +39,7 @@ test('completed resume allows exactly one more title announcement', () => {
   state.manager.resumeCompleted();
   ready();
   state.manager.resumeCompleted();
-  assert.deepEqual(state.messages, [
-    'Playing: Movie, æøå 🎬',
-    'Native seek OSD',
-    'Playing: Movie, æøå 🎬',
-  ]);
+  assert.deepEqual(state.messages, ['Movie, æøå 🎬', 'Native seek OSD', 'Movie, æøå 🎬']);
 });
 
 test('metadata arriving after resume produces one usable post-resume message', () => {
@@ -55,7 +51,7 @@ test('metadata arriving after resume produces one usable post-resume message', (
   ready();
   ready();
   state.manager.resumeCompleted();
-  assert.deepEqual(state.messages, ['Playing: Late title']);
+  assert.deepEqual(state.messages, ['Late title']);
 });
 
 test('a stream URL is not echoed while waiting for the initial title', () => {
@@ -64,7 +60,7 @@ test('a stream URL is not echoed while waiting for the initial title', () => {
   assert.deepEqual(state.messages, []);
   state.status.title = 'Ready';
   ready();
-  assert.deepEqual(state.messages, ['Playing: Ready']);
+  assert.deepEqual(state.messages, ['Ready']);
 });
 
 test('missing titles remain silent until a usable title exists', () => {
@@ -75,7 +71,7 @@ test('missing titles remain silent until a usable title exists', () => {
     assert.deepEqual(state.messages, []);
     state.status.title = 'Ready';
     ready();
-    assert.deepEqual(state.messages, ['Playing: Ready']);
+    assert.deepEqual(state.messages, ['Ready']);
   }
 });
 
@@ -83,7 +79,7 @@ test('each new load of a repeated item gets its own announcement', () => {
   const state = setup('Repeated movie');
   state.manager.beginFile(true);
   state.manager.beginFile(true);
-  assert.deepEqual(state.messages, ['Playing: Repeated movie', 'Playing: Repeated movie']);
+  assert.deepEqual(state.messages, ['Repeated movie', 'Repeated movie']);
 });
 
 test('turning off the title toggle suppresses initial and post-resume messages', () => {
@@ -109,7 +105,7 @@ test('loading another file invalidates old metadata callbacks and gives the new 
   state.manager.beginFile(true);
   oldReady();
   state.manager.resumeCompleted();
-  assert.deepEqual(state.messages, ['Playing: Incoming', 'Playing: Incoming']);
+  assert.deepEqual(state.messages, ['Incoming', 'Incoming']);
 });
 
 test('ending a file prevents its pending initial or resume announcement', () => {
