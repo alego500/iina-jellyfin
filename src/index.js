@@ -10,6 +10,7 @@ const { createServerSessionStore } = require('./lib/server-session-store.js');
 const { createPlaybackTrackingManager } = require('./lib/playback-tracking.js');
 const { createAutoplayManager } = require('./lib/autoplay-manager.js');
 const { createMediaActionsManager, mediaTitleOption } = require('./lib/media-actions.js');
+const { appendPlaylistItems } = require('./lib/playlist-append.js');
 
 const {
   core,
@@ -593,12 +594,12 @@ function flushPendingPlaylistQueue(fileUrl) {
   }
 
   try {
-    // IINA updates its own playlist model and UI when adding this batch.
-    const added = playlist.add(
-      items.map((item) => item.streamUrl),
-      -1
-    );
-    if (added === false) throw new Error('IINA could not append the playlist');
+    appendPlaylistItems(items, {
+      mpv,
+      playlist,
+      useTitles: preferences.get('set_video_title'),
+      log: debugLog,
+    });
     debugLog(`Appended ${items.length} queued item(s) to the playlist`);
   } catch (error) {
     debugLog('Could not append queued items: ' + error);

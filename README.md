@@ -132,6 +132,11 @@ Playlist search is also available through the **Playlists** search filter. **Ope
 opens the selected playlist in your web browser. Album and playlist Play All controls appear
 above their item lists; multi-item playback uses the current window so the queue stays together.
 
+With **Set Video Title** enabled, Play All also names the unplayed entries as soon as
+the first item loads. The names come from the existing Jellyfin list; videos do not
+need to start playing to reveal their titles. This also applies when opening a
+Jellyfin playlist web link. Turn off Set Video Title to retain URL-only queue entries.
+
 ##### Advanced Filtering & Sorting
 
 The Movies and TV Series tabs include powerful filtering and sorting tools to help you navigate large libraries:

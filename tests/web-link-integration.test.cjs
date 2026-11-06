@@ -10,7 +10,7 @@ function setup(get) {
   const commands = [];
   const appended = [];
   const sidebarHandlers = {};
-  const properties = { 'stream-open-filename': webUrl };
+  const properties = { 'stream-open-filename': webUrl, 'playlist-count': 1 };
   const values = {
     jellyfin_servers: JSON.stringify([
       { id: 's', serverUrl: 'https://host', accessToken: 'test-token', userId: 'u' },
@@ -43,6 +43,7 @@ function setup(get) {
       sync() {},
     },
     mpv: {
+      getNumber: (key) => properties[key],
       getFlag: () => false,
       addHook: (name, priority, callback) => {
         hooks[priority] = callback;
@@ -51,7 +52,10 @@ function setup(get) {
       set: (key, value) => {
         properties[key] = value;
       },
-      command: (name, args) => commands.push({ name, args }),
+      command(name, args) {
+        commands.push({ name, args });
+        if (name === 'loadlist') properties['playlist-count']++;
+      },
     },
     playlist: {
       add: (urls, at) => {
@@ -118,6 +122,30 @@ test('web hook always continues even when the mpv property read fails', async ()
   let continued = 0;
   await state.hooks[40](() => continued++);
   assert.equal(continued, 1);
+});
+
+test('web playlist links import titles for entries that have not played', async () => {
+  const state = setup(async (url) => ({
+    data: url.includes('/Playlists/')
+      ? {
+          TotalRecordCount: 2,
+          Items: [
+            { Id: 'first', Type: 'Video', Name: 'One' },
+            { Id: 'second', Type: 'Audio', Name: 'Two, æøå' },
+          ],
+        }
+      : { Type: 'Playlist' },
+  }));
+  state.iina.preferences.set('set_video_title', true);
+  await state.hooks[40](() => {});
+  assert.equal(state.commands.length, 0);
+  state.events['iina.file-loaded'](webUrl);
+  assert.equal(state.commands[0].name, 'loadlist');
+  assert.match(
+    state.commands[0].args[0],
+    /^memory:\/\/#EXTM3U\n#EXTINF:-1,Two, æøå\nhttps:\/\/host\/Audio\/second\/stream/
+  );
+  assert.deepEqual(Array.from(state.appended[0].urls), []);
 });
 
 test('web resolution leaves the upstream title hook intact and respects the title preference', async () => {
