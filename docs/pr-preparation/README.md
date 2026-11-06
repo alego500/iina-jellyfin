@@ -2,7 +2,7 @@
 
 Prepared and published as draft pull requests on 2026-10-14 in the personal fork. No pull requests were submitted to the original project.
 
-Later work: the [playlist-title fix](playlist-titles.md), implemented and verified on 2026-11-06, adds an in-memory M3U import on a separate branch targeting the personal fork's `main`. The October implementation and validation notes below describe the earlier draft branches.
+Later work: the [playlist-title fix](playlist-titles.md), implemented and verified on 2026-11-06, adds an in-memory M3U import in [draft PR #6](https://github.com/alego500/iina-jellyfin/pull/6), targeting the personal fork's `main`. The October implementation and validation notes below describe the earlier draft branches.
 
 ## Published drafts
 

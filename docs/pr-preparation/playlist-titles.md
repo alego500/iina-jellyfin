@@ -32,4 +32,4 @@ Playback tracking, resume behavior, authentication, plugin identity, version num
 
 ## Review scope
 
-Publish as a separate draft PR to `alego500/iina-jellyfin`, targeting `main`. Existing draft PRs #1–#5 retain their current branches and descriptions. This PR adds titles to the complete personal fork; it is not an upstream submission or a change to the existing PR dependency chain.
+Published as [draft PR #6](https://github.com/alego500/iina-jellyfin/pull/6) in `alego500/iina-jellyfin`, targeting `main`. Existing draft PRs #1–#5 retain their current branches and descriptions. This PR adds titles to the complete personal fork; it is not an upstream submission or a change to the existing PR dependency chain.
