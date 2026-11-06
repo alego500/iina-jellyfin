@@ -2,6 +2,8 @@
 
 Investigated on 2026-11-06. This document preserves the findings for a future IINA bug report; no upstream issue has been submitted.
 
+The plugin workaround is published as [draft PR #7](https://github.com/alego500/iina-jellyfin/pull/7) in the personal fork, from `codex/pr-playback-title-osd` to `main`.
+
 ## Observed behavior
 
 Environment: IINA 1.5.0 (build 180), bundled mpv 0.41.0, Jellyfin Server 12.2.0, and the personal Jellyfin plugin based on v0.7.5.
