@@ -10,6 +10,8 @@ function createPlaybackTrackingManager({
   secondsToTicks,
   ticksToSeconds,
   log,
+  getPlaybackIdentity = () => null,
+  onResumeCompleted = () => {},
 }) {
   let currentPlaybackSession = null;
   // Bumped by every start and stop so an in-flight startPlaybackTracking can
@@ -79,6 +81,8 @@ function createPlaybackTrackingManager({
   const PLAYBACK_TICK_INTERVAL = 1000;
   const PROGRESS_REPORT_TICKS = 10;
   const WATCHED_THRESHOLD = 0.95;
+  // Allow minor keyframe rounding when confirming IINA's asynchronous seek.
+  const RESUME_SEEK_TOLERANCE_SECONDS = 2;
 
   async function fetchResumePosition(serverBase, itemId, apiKey) {
     try {
@@ -154,6 +158,7 @@ function createPlaybackTrackingManager({
 
           log(`Resuming playback at ${resumePosition.toFixed(1)}s`);
           core.seekTo(resumePosition);
+          session.resumeCompletionPending = true;
 
           if (preferences.get('show_notifications')) {
             const minutes = Math.floor(resumePosition / 60);
@@ -166,6 +171,31 @@ function createPlaybackTrackingManager({
       }, 1000);
     } catch (error) {
       log(`Error resuming from Jellyfin: ${error.message}`);
+    }
+  }
+
+  function handlePlaybackRestart() {
+    const session = currentPlaybackSession;
+    if (!session || trackedFileEnded || !session.resumeCompletionPending) return;
+    if (session.playbackIdentity !== null && getPlaybackIdentity() !== session.playbackIdentity) {
+      return;
+    }
+
+    try {
+      // playback-restart also fires on initial load and ordinary user seeks.
+      // Only complete our own resume after status reaches its saved target.
+      const position = core.status.position;
+      if (
+        !Number.isFinite(position) ||
+        !Number.isFinite(session.resumePosition) ||
+        Math.abs(position - session.resumePosition) > RESUME_SEEK_TOLERANCE_SECONDS
+      ) {
+        return;
+      }
+      session.resumeCompletionPending = false;
+      onResumeCompleted();
+    } catch (error) {
+      log(`Could not handle completed resume: ${error.message}`);
     }
   }
 
@@ -356,6 +386,7 @@ function createPlaybackTrackingManager({
     log(`Starting playback tracking for item: ${itemId}`);
 
     const requestId = ++sessionRequestCounter;
+    const playbackIdentity = getPlaybackIdentity();
 
     let playSessionId = null;
     let mediaSourceId = null;
@@ -388,6 +419,8 @@ function createPlaybackTrackingManager({
       mediaSourceId,
       startTime: Date.now(),
       resumePosition: null,
+      resumeCompletionPending: false,
+      playbackIdentity,
       duration: null,
       hasReportedWatched: false,
     };
@@ -619,6 +652,7 @@ function createPlaybackTrackingManager({
     stopPlaybackTracking,
     markTrackedFileEnded,
     handlePauseChange,
+    handlePlaybackRestart,
     markAsWatched,
     getCurrentPlaybackSession,
   };

@@ -46,16 +46,31 @@ Use sanitized URLs and remove credentials from report attachments. No token or a
 The plugin now adds **Show playback title when opening Jellyfin media** under **Notifications & UI**. Its preference key is `show_playback_title_osd`, with a default of `true`.
 
 - After a Jellyfin file loads, read `core.status.title` and display `Playing: <title>` if the title is already usable.
-- If the existing metadata-title update is still pending, retry the same guarded callback when that update finishes. The OSD helper makes no extra HTTP requests and adds no load delay or polling timer.
-- Emit at most one opening-title message per loaded file, including revisits to the same item. Invalidate delayed callbacks when a file ends, another load begins, or another file finishes loading.
+- If the existing metadata-title update is still pending, retry the same guarded callback when that update finishes. The OSD helper makes no extra HTTP requests or load delay.
+- If the playback tracker requests an automatic Jellyfin resume, arm one post-resume notification after `core.seekTo()` succeeds. Handle `mpv.playback-restart` and verify that the same playlist entry is still active and the reported position is within two seconds of the saved target before sending that notification.
+- Consume the pending completion flag before notifying, so duplicate restart events and later manual seeks cannot trigger additional messages. Drop delayed callbacks when a file ends or another file loads.
 - Recheck the toggle before displaying a delayed result. Never repeat an empty title or an HTTP stream URL as the custom title message.
 - Keep this toggle independent of `show_notifications`. Suppress the older optional automatic `Title:` notification so it cannot duplicate the new opening message. The manual Set Jellyfin Title action retains its existing notification behavior.
 - Keep the separate `set_video_title` preference: it controls fetching/applying Jellyfin metadata titles. If it is disabled, the new OSD can still use an existing embedded media title; it does not fetch a replacement itself.
 
 The workaround can replace the URL message once the title is ready. It cannot guarantee that the native URL message never appears first, and it does not change IINA's global OSD settings or local-file opening messages.
 
+### Resume-completion detection
+
+The extra title depends on the existing Jellyfin resume lookup: the item must be unwatched and its saved position must meet the existing 15-second minimum. The existing one-second resume delay and playback-progress protections remain unchanged. No resume, a watched item, an insignificant position, disabled progress sync, or a failed seek produces no second title message.
+
+IINA [handles playback-restart](https://github.com/iina/iina/blob/v1.5.0/iina/MPVController.swift#L1074-L1089) after seeking, then [delivers the event to plugins on its main queue](https://github.com/iina/iina/blob/v1.5.0/iina/MPVController.swift#L1141-L1147). This places the new title after its native seek message. Merely calling `seekTo()` or sampling a position is not used as proof that the seek completed. A premature restart event away from the saved target leaves completion pending for the real event.
+
+If the title itself arrives only after resume, the guarded metadata callback displays it once then. The title helper uses no timers or extra resume requests. IINA's own OSD settings determine when the message fades out.
+
+### Earlier local experiments
+
+The user reported that the approximately one-second delayed resume seek overwrites the title message, then tested and confirmed that repeating the title for five seconds works. A subsequent local experiment added a 2–10 second repeat-length slider. The requested alternative now replaces both with a single notification after confirmed resume completion; the slider, its default preference, and its custom binding script have been removed. Old saved duration values are ignored. PR #7 now includes the resume-completion implementation. The timed repeats and duration slider are not part of that PR.
+
 ## Validation
 
-Automated coverage exercises immediate and delayed titles, single-item browser playback, direct streams, duplicate-message suppression, the disabled toggle, file replacement/end, local files, and an unavailable OSD bridge. Existing title, playlist, subtitle, and playback-progress regressions remain part of the full test suite.
+Automated coverage exercises immediate and delayed titles, single-item browser playback, direct streams, asynchronous resume completion, premature and duplicate restart events, insignificant resume points, watched items, failed seeks, the disabled toggle, file replacement/end, local files, and an unavailable OSD bridge. Existing title, playlist, subtitle, and playback-progress regressions remain part of the full test suite.
 
-The isolated review branch passes **105 tests** and `npm run check` (lint and formatting). The complete development working copy passes **119 tests**, including the separate playlist-title and resume follow-ups. After restarting IINA, a live preference read-back confirmed `show_playback_title_osd: true` while `show_notifications: false`. The user completed the requested manual testing on 2026-11-06 and asked to publish the workaround. IINA's global OSD settings were left unchanged.
+At publication, the original single-announcement review branch passed **105 tests** and `npm run check` (lint and formatting), and the combined development working copy passed **119 tests**. After restarting IINA, a live preference read-back confirmed `show_playback_title_osd: true` while `show_notifications: false`. The user completed the requested manual testing on 2026-11-06 and asked to publish that workaround. IINA's global OSD settings were left unchanged.
+
+The fixed five-second follow-up passed **123 tests** and `npm run check`, and the user confirmed its live behavior during resume. The superseded slider follow-up passed **128 tests** and `npm run check`. The resume-completion implementation passes **116 tests** and `npm run check` on the isolated PR #7 branch. The combined development copy passes **125 tests**, including the separate playlist-title and progress-reporting fixes. The PR tests cover actual asynchronous completion, stale playlist-entry IDs, playlist reordering, disabled progress sync, failed seeks, and duplicate events while retaining the existing resume regressions. Live verification of the event-based alternative remains with the user.

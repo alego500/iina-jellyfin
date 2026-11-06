@@ -132,6 +132,7 @@ const {
   stopPlaybackTracking,
   markTrackedFileEnded,
   handlePauseChange,
+  handlePlaybackRestart,
   getCurrentPlaybackSession,
 } = createPlaybackTrackingManager({
   core,
@@ -145,6 +146,15 @@ const {
   secondsToTicks,
   ticksToSeconds,
   log: debugLog,
+  onResumeCompleted: () => playbackTitleOsd.resumeCompleted(),
+  getPlaybackIdentity() {
+    if (typeof mpv.getNumber !== 'function') return null;
+    const index = mpv.getNumber('playlist-pos');
+    if (!Number.isFinite(index) || index < 0) return null;
+    // mpv's entry ID survives reordering and distinguishes duplicate URLs.
+    const id = mpv.getNumber(`playlist/${index}/id`);
+    return Number.isFinite(id) ? id : null;
+  },
 });
 
 const { setupAutoplayForEpisode, resetForNewFile, clearQueuedFlag, isQueued } =
@@ -756,6 +766,8 @@ mpv.addHook('on_load', 50, async (next) => {
 
 // Pause/unpause state sync
 event.on('mpv.pause.changed', handlePauseChange);
+// IINA delivers this after updating its seek state and scheduling the seek OSD.
+event.on('mpv.playback-restart', handlePlaybackRestart);
 
 // Handle file ending (includes both natural end and replacement)
 event.on('mpv.end-file', () => {

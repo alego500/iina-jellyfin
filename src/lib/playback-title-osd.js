@@ -2,45 +2,56 @@
 
 function createPlaybackTitleOsd({ core, preferences, log }) {
   let fileGeneration = 0;
+  let onResumeCompleted = null;
 
   function invalidate() {
     fileGeneration++;
+    onResumeCompleted = null;
   }
 
   function beginFile(isJellyfin) {
-    const generation = ++fileGeneration;
+    invalidate();
+    const generation = fileGeneration;
     let shown = false;
+    let resumed = false;
+    let shownAfterResume = false;
 
     function showWhenReady() {
       if (
         !isJellyfin ||
-        shown ||
         generation !== fileGeneration ||
-        !preferences.get('show_playback_title_osd')
+        !preferences.get('show_playback_title_osd') ||
+        (shown && (!resumed || shownAfterResume))
       ) {
         return;
       }
       try {
         const title = core.status?.title;
-        // Until the metadata is ready, IINA can return the stream URL here.
-        // Wait for the title update instead of repeating that URL on screen.
+        // A slow metadata lookup can leave the stream URL here temporarily.
         if (typeof title !== 'string' || !title.trim() || /^https?:\/\//i.test(title.trim())) {
           return;
         }
         core.osd(`Playing: ${title}`);
         shown = true;
+        if (resumed) shownAfterResume = true;
       } catch (error) {
         log(`Could not display the playback title: ${error.message}`);
       }
     }
 
-    // A browser/pre-load title is already available when file-loaded fires.
-    // Return the same guarded callback for a later metadata result as well.
+    onResumeCompleted = () => {
+      resumed = true;
+      showWhenReady();
+    };
     showWhenReady();
     return showWhenReady;
   }
 
-  return { beginFile, invalidate };
+  function resumeCompleted() {
+    if (onResumeCompleted) onResumeCompleted();
+  }
+
+  return { beginFile, invalidate, resumeCompleted };
 }
 
 module.exports = { createPlaybackTitleOsd };

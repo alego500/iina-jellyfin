@@ -1,13 +1,20 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { loadModule } = require('./helpers.cjs');
-const { createPlaybackTitleOsd } = loadModule('src/lib/playback-title-osd.js');
 
 function setup(title = 'Movie, æøå 🎬') {
   const status = { title };
   const values = { show_playback_title_osd: true, show_notifications: false };
   const messages = [];
   const errors = [];
+  const { createPlaybackTitleOsd } = loadModule('src/lib/playback-title-osd.js', {
+    setInterval() {
+      assert.fail('Title notifications must not start a repeat timer');
+    },
+    setTimeout() {
+      assert.fail('Resume completion must not use a guessed delay');
+    },
+  });
   const core = { status, osd: (message) => messages.push(message) };
   const manager = createPlaybackTitleOsd({
     core,
@@ -17,7 +24,7 @@ function setup(title = 'Movie, æøå 🎬') {
   return { manager, core, status, values, messages, errors };
 }
 
-test('a ready Jellyfin title is announced once independently of subtitle notifications', () => {
+test('a ready title is announced once without timers or duplicate metadata messages', () => {
   const state = setup();
   const ready = state.manager.beginFile(true);
   ready();
@@ -25,13 +32,39 @@ test('a ready Jellyfin title is announced once independently of subtitle notific
   assert.deepEqual(state.messages, ['Playing: Movie, æøå 🎬']);
 });
 
-test('a stream URL is never echoed while waiting for its title', () => {
+test('completed resume allows exactly one more title announcement', () => {
+  const state = setup();
+  const ready = state.manager.beginFile(true);
+  state.core.osd('Native seek OSD');
+  state.manager.resumeCompleted();
+  ready();
+  state.manager.resumeCompleted();
+  assert.deepEqual(state.messages, [
+    'Playing: Movie, æøå 🎬',
+    'Native seek OSD',
+    'Playing: Movie, æøå 🎬',
+  ]);
+});
+
+test('metadata arriving after resume produces one usable post-resume message', () => {
   const state = setup('https://host/Videos/id/stream?ApiKey=test-token');
   const ready = state.manager.beginFile(true);
+  state.manager.resumeCompleted();
   assert.deepEqual(state.messages, []);
-  state.status.title = 'Resolved movie';
+  state.status.title = 'Late title';
   ready();
-  assert.deepEqual(state.messages, ['Playing: Resolved movie']);
+  ready();
+  state.manager.resumeCompleted();
+  assert.deepEqual(state.messages, ['Playing: Late title']);
+});
+
+test('a stream URL is not echoed while waiting for the initial title', () => {
+  const state = setup('https://host/stream');
+  const ready = state.manager.beginFile(true);
+  assert.deepEqual(state.messages, []);
+  state.status.title = 'Ready';
+  ready();
+  assert.deepEqual(state.messages, ['Playing: Ready']);
 });
 
 test('missing titles remain silent until a usable title exists', () => {
@@ -46,48 +79,53 @@ test('missing titles remain silent until a usable title exists', () => {
   }
 });
 
-test('turning off the title toggle suppresses both ready and delayed announcements', () => {
-  const disabled = setup();
-  disabled.values.show_playback_title_osd = false;
-  disabled.values.show_notifications = true;
-  disabled.manager.beginFile(true)();
-  assert.deepEqual(disabled.messages, []);
-
-  const delayed = setup('https://host/stream');
-  const ready = delayed.manager.beginFile(true);
-  delayed.values.show_playback_title_osd = false;
-  delayed.status.title = 'Late title';
-  ready();
-  assert.deepEqual(delayed.messages, []);
-});
-
-test('each new load, including a repeated item, gets its own announcement', () => {
+test('each new load of a repeated item gets its own announcement', () => {
   const state = setup('Repeated movie');
   state.manager.beginFile(true);
   state.manager.beginFile(true);
   assert.deepEqual(state.messages, ['Playing: Repeated movie', 'Playing: Repeated movie']);
 });
 
-test('ending or replacing a file invalidates its pending announcement', () => {
+test('turning off the title toggle suppresses initial and post-resume messages', () => {
+  const disabled = setup();
+  disabled.values.show_playback_title_osd = false;
+  disabled.values.show_notifications = true;
+  disabled.manager.beginFile(true)();
+  disabled.manager.resumeCompleted();
+  assert.deepEqual(disabled.messages, []);
+
+  const state = setup();
+  const ready = state.manager.beginFile(true);
+  state.values.show_playback_title_osd = false;
+  state.manager.resumeCompleted();
+  ready();
+  assert.equal(state.messages.length, 1);
+});
+
+test('loading another file invalidates old metadata callbacks and gives the new file its own messages', () => {
+  const state = setup('https://host/stream');
+  const oldReady = state.manager.beginFile(true);
+  state.status.title = 'Incoming';
+  state.manager.beginFile(true);
+  oldReady();
+  state.manager.resumeCompleted();
+  assert.deepEqual(state.messages, ['Playing: Incoming', 'Playing: Incoming']);
+});
+
+test('ending a file prevents its pending initial or resume announcement', () => {
   const state = setup('https://host/stream');
   const ready = state.manager.beginFile(true);
   state.manager.invalidate();
-  state.status.title = 'Incoming title';
+  state.status.title = 'Ended';
+  state.manager.resumeCompleted();
   ready();
   assert.deepEqual(state.messages, []);
-
-  const next = state.manager.beginFile(true);
-  next();
-  ready();
-  assert.deepEqual(state.messages, ['Playing: Incoming title']);
 });
 
-test('local files invalidate pending Jellyfin callbacks without adding messages', () => {
-  const state = setup('https://host/stream');
-  const ready = state.manager.beginFile(true);
-  state.status.title = 'Local movie';
+test('local files keep their native OSD without extra plugin messages', () => {
+  const state = setup('Local movie');
   state.manager.beginFile(false)();
-  ready();
+  state.manager.resumeCompleted();
   assert.deepEqual(state.messages, []);
 });
 

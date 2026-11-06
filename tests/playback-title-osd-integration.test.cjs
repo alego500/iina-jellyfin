@@ -62,9 +62,20 @@ function setup({ getMetadata, enabled = true, setTitle = true } = {}) {
   loadModule('src/index.js', {
     iina,
     setTimeout() {},
-    require: (path) => loadModule('src/' + path.slice(2), { setTimeout, clearTimeout }),
+    require: (path) =>
+      loadModule('src/' + path.slice(2), {
+        setTimeout,
+        clearTimeout,
+      }),
   });
-  return { messages, requests, events, hooks, handlers, properties };
+  return {
+    messages,
+    requests,
+    events,
+    hooks,
+    handlers,
+    properties,
+  };
 }
 
 test('browser playback announces the known title once and suppresses the older automatic Title message', async () => {
