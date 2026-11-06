@@ -28,6 +28,7 @@
     "preferred_languages": "en,eng",
     "download_all_subtitles": false,
     "show_notifications": false,
+    "show_playback_title_osd": true,
     "debug_logging": false,
     "set_video_title": true,
     "open_in_new_window": true,

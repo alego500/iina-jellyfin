@@ -10,6 +10,7 @@ const { createServerSessionStore } = require('./lib/server-session-store.js');
 const { createPlaybackTrackingManager } = require('./lib/playback-tracking.js');
 const { createAutoplayManager } = require('./lib/autoplay-manager.js');
 const { createMediaActionsManager, mediaTitleOption } = require('./lib/media-actions.js');
+const { createPlaybackTitleOsd } = require('./lib/playback-title-osd.js');
 
 const {
   core,
@@ -54,6 +55,7 @@ function consumeReplacementGuard() {
 }
 
 const debugLog = createDebugLogger(preferences, console);
+const playbackTitleOsd = createPlaybackTitleOsd({ core, preferences, log: debugLog });
 
 const {
   getClientIdentity,
@@ -203,6 +205,7 @@ function onFileLoaded(fileUrl) {
   stopPlaybackTracking();
 
   const jellyfinInfo = updateFromFileUrl(fileUrl);
+  const showPlaybackTitle = playbackTitleOsd.beginFile(Boolean(jellyfinInfo));
   if (jellyfinInfo) {
     // Decide which credentials playback reporting (progress/resume/watched)
     // should use. By default it's the api_key embedded in the playing URL, so
@@ -248,7 +251,14 @@ function onFileLoaded(fileUrl) {
     // Set video title from metadata if enabled
     if (preferences.get('set_video_title')) {
       debugLog(`Setting video title from metadata for: ${jellyfinInfo.itemId}`);
-      setVideoTitleFromMetadata(jellyfinInfo.serverBase, jellyfinInfo.itemId, jellyfinInfo.apiKey);
+      // The opening title has its own setting and deduplication. Suppress the
+      // older optional "Title:" notification for this automatic metadata call.
+      setVideoTitleFromMetadata(
+        jellyfinInfo.serverBase,
+        jellyfinInfo.itemId,
+        jellyfinInfo.apiKey,
+        false
+      ).then(showPlaybackTitle);
     }
 
     // Setup autoplay for TV episodes if enabled
@@ -699,6 +709,11 @@ mpv.addHook('on_load', 10, async (next) => {
   }
 });
 
+// Invalidate pending OSD callbacks as soon as another file starts loading.
+mpv.addHook('on_load', 20, () => {
+  playbackTitleOsd.invalidate();
+});
+
 // Resolve web links before upstream's priority-50 title hook sees the stream.
 mpv.addHook('on_load', 40, async (next) => {
   try {
@@ -744,6 +759,7 @@ event.on('mpv.pause.changed', handlePauseChange);
 
 // Handle file ending (includes both natural end and replacement)
 event.on('mpv.end-file', () => {
+  playbackTitleOsd.invalidate();
   // IINA may already expose position 0 here. Freeze the outgoing file's last
   // sample before stopping it, including manual playlist Next/Previous.
   markTrackedFileEnded();
