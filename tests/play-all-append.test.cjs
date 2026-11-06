@@ -10,7 +10,7 @@ function setup(get) {
   const commands = [];
   const appended = [];
   const sidebarHandlers = {};
-  const properties = { 'stream-open-filename': webUrl };
+  const properties = { 'stream-open-filename': webUrl, 'playlist-count': 1 };
   const values = {
     jellyfin_servers: JSON.stringify([
       { id: 's', serverUrl: 'https://host', accessToken: 'test-token', userId: 'u' },
@@ -43,6 +43,7 @@ function setup(get) {
       sync() {},
     },
     mpv: {
+      getNumber: (key) => properties[key],
       addHook: (name, priority, callback) => {
         hooks[priority] = callback;
       },
@@ -50,7 +51,14 @@ function setup(get) {
       set: (key, value) => {
         properties[key] = value;
       },
-      command: (name, args) => commands.push({ name, args }),
+      command(name, args) {
+        commands.push({ name, args });
+        if (name === 'loadlist') {
+          properties['playlist-count'] += args[0]
+            .split('\n')
+            .filter((line) => /^https?:/.test(line)).length;
+        }
+      },
     },
     playlist: {
       add: (urls, at) => {
@@ -93,4 +101,38 @@ test('sidebar Play All appends all 79 remaining URLs even when titles contain co
     items.slice(1).map((item) => item.streamUrl)
   );
   assert.equal(state.commands.filter((command) => command.name === 'loadfile').length, 0);
+});
+
+test('Play All imports every queued title without fetching unplayed item metadata', () => {
+  const requests = [];
+  const state = setup(async (url) => {
+    requests.push(url);
+    return { data: { Name: 'Current video' } };
+  });
+  state.iina.preferences.set('set_video_title', true);
+  state.events['iina.window-loaded']();
+  const items = Array.from({ length: 80 }, (_, i) => ({
+    streamUrl: `https://host/Videos/item${i}/stream?static=true&ApiKey=test-token`,
+    title: `Video ${i}, æøå 🎬`,
+  }));
+  state.sidebarHandlers['play-media-list']({ items });
+  assert.equal(state.commands.filter(({ name }) => name === 'loadlist').length, 0);
+  state.events['iina.file-loaded'](items[0].streamUrl);
+  const imports = state.commands.filter(({ name }) => name === 'loadlist');
+  assert.equal(imports.length, 1);
+  assert.equal(imports[0].args[1], 'append');
+  assert.equal(
+    imports[0].args[0],
+    `memory://#EXTM3U\n${items
+      .slice(1)
+      .map((item) => `#EXTINF:-1,${item.title}\n${item.streamUrl}\n`)
+      .join('')}`
+  );
+  assert.equal(state.properties['playlist-count'], 80);
+  assert.equal(state.appended.length, 1);
+  assert.deepEqual(Array.from(state.appended[0].urls), [], 'refresh without adding URLs again');
+  assert.equal(requests.length, 1, 'only the currently loaded item needs its usual metadata');
+  assert.match(requests[0], /\/Items\/item0(?:\?|$)/);
+  state.events['iina.file-loaded'](items[1].streamUrl);
+  assert.equal(state.commands.filter(({ name }) => name === 'loadlist').length, 1);
 });
