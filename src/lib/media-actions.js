@@ -295,7 +295,7 @@ function createMediaActionsManager({
     titleForNextItem = { title, itemId };
   }
 
-  async function setVideoTitleFromMetadata(serverBase, itemId, apiKey) {
+  async function setVideoTitleFromMetadata(serverBase, itemId, apiKey, notify = true) {
     const generation = fileGeneration;
     try {
       if (!preferences.get('set_video_title')) {
@@ -326,7 +326,7 @@ function createMediaActionsManager({
         return;
       }
 
-      if (preferences.get('show_notifications')) {
+      if (notify && preferences.get('show_notifications')) {
         core.osd(`Title: ${title}`);
       }
     } catch (error) {

@@ -2,6 +2,8 @@
 
 Prepared and published as draft pull requests on 2026-10-14 in the personal fork. No pull requests were submitted to the original project.
 
+Later work: the [opening-title OSD workaround and IINA investigation](../iina-opening-osd-investigation.md) add a separate Notifications & UI toggle in [draft PR #7](https://github.com/alego500/iina-jellyfin/pull/7), targeting the personal fork's `main`.
+
 ## Published drafts
 
 - [#1 — Native IINA queue append](https://github.com/alego500/iina-jellyfin/pull/1)

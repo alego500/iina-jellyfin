@@ -116,6 +116,20 @@ test('a title for the file still playing is applied', async () => {
   assert.equal(calls.title, 'Pilot');
 });
 
+test('automatic title updates can suppress the optional notification without changing manual defaults', async () => {
+  const messages = [];
+  const { manager } = loadMediaActions({
+    core: { osd: (message) => messages.push(message) },
+    preferences: { get: (key) => ['set_video_title', 'show_notifications'].includes(key) },
+    fetchItemMetadata: async () => ({ Name: 'Pilot' }),
+  });
+  manager.updateFromFileUrl(E01);
+  await manager.setVideoTitleFromMetadata('https://jf', 'e01', 'K', false);
+  assert.deepEqual(messages, []);
+  await manager.setVideoTitleFromMetadata('https://jf', 'e01', 'K');
+  assert.deepEqual(messages, ['Title: Pilot']);
+});
+
 test('a local file played after a Jellyfin item does not keep its title', async () => {
   const { manager, calls } = loadMediaActions({
     fetchItemMetadata: async () => ({ Name: 'Pilot' }),

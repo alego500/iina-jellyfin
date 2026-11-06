@@ -189,11 +189,14 @@ Access plugin settings through IINA → Preferences → Plugins → Jellyfin:
   - Resume positions sync across all your devices
 - **Report to my connected account (ignore link's API key)**: When enabled, playback progress, resume, and watched status are reported to the Jellyfin account you're logged into via the browser sidebar, instead of the account whose `api_key` is embedded in the playing URL. Useful when several people open the same shared link (e.g. via Syncplay) — each viewer's progress records into their own account. Requires a logged-in server; falls back to the URL's `api_key` if none is connected.
 - **Show on-screen notifications**: Display OSD messages when subtitles are downloaded
+- **Show playback title when opening Jellyfin media**: Under Notifications & UI, show the media title once the title is ready, and once again after an automatic Jellyfin resume seek finishes (enabled by default). This is independent of subtitle notifications. IINA's built-in opening URL message may appear briefly first; the plugin does not change IINA's global OSD settings.
 - **Preferred Languages**: Comma-separated language codes (e.g., `en,eng,pol,pl`)
 - **Download all available subtitles**: Download all subtitle tracks, ignoring language preferences
 - **Set video title from Jellyfin metadata**: Replace filenames with proper movie/show titles
 - **Open media in new IINA window**: Play media from browser in separate windows
 - **Enable autoplay**: Automatically queue the next episode when the current episode finishes, supporting cross-season playback
+
+The [opening OSD investigation](docs/iina-opening-osd-investigation.md) explains why IINA can briefly show a stream URL before the plugin's title message and records source links for a future bug report.
 
 ### Menu Options
 
